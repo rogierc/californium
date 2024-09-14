@@ -39,9 +39,10 @@ public interface ResourceParser<T extends ResourceParser<T>> extends Destroyable
 	 * Load resource.
 	 * 
 	 * @param reader reader for configuration.
+	 * @return number of added entries.
 	 * @throws IOException if an I/O error occurred
 	 */
-	void load(Reader reader) throws IOException;
+	int load(Reader reader) throws IOException;
 
 	/**
 	 * Create resource parser.

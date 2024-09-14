@@ -51,11 +51,11 @@ Web-Browser application chart page:
 
 ![browser-chart](./docs/S3-proxy-chart.png)
 
-Web-Browser application device status page (from device):
+Web-Browser application device status page (data from device):
 
 ![browser-status](./docs/S3-proxy-status.png)
 
-Web-Browser application device configuration page (to device):
+Web-Browser application device configuration page (data to device):
 
 ![browser-config](./docs/S3-proxy-config.png)
 
@@ -63,15 +63,17 @@ Web-Browser application server diagnose page:
 
 ![browser-diagnose](./docs/S3-proxy-diagnose.png)
 
+Some more details about the web-UI can be found in [web-UI documentation](./docs/web-ui.md).
+
 ## Performance and Resources
 
 [<img src="./docs/quadrant.svg" width="65%" />](./docs/quadrant.svg)
 
 - The footprint of the OS and Java VM, around 800 MB RAM, requires to use at least 2 GB RAM.
 - The maximum number of devices depends mainly on the available RAM. Per PSK around 3K, for certificate based devices 5K.
-- The maximum number of requests per second also depends on the available RAM and CPU for processing. Usually the backend slows down the processing a lot. Without backend, a 4x3GHz System runs 50000 requests/s. With backends, that’s usually much less.
+- The maximum number of requests per second also depends on the available RAM and CPU for processing. Usually the backend slows down the processing a lot. Without backend, a 4x3GHz System with 16 GB RAM runs 50000 requests/s. With backends, that’s usually much less.
 - If S3 is used as backend, usually the write preformance of S3 limits then the number of requests/s. 300 requests/s up to 3000 requests/s could be found.
-- The Javascript Web App is considered only for first steps, Therefore it may handle 100-200 device, it’s not expected to be used with more.    
+- The Javascript Web App is considered only for first steps, Therefore it may handle 100-200 device, it’s not expected to be used with more.
 
 ## General Usage
 
@@ -88,7 +90,8 @@ Usage: S3ProxyServer [-h] [--diagnose] [--[no-]coap] [--wildcard-interface |
                      [--coaps-password64=<password64>]] [--device-file=<file>
                      [--device-file-password64=<password64>]]
                      [--store-file=<file> --store-max-age=<maxAge>
-                     [--store-password64=<password64>]] ([--domain-file=<file>
+                     [--store-password64=<password64>]] [--provisioning
+                     [--replace]] ([--domain-file=<file>
                      [--domain-file-password64=<password64>]] |
                      [[[--s3-endpoint=<endpoint>] [--s3-region=<region>]
                      [--s3-bucket=<bucket>] [--s3-acl=<acl>]
@@ -98,7 +101,10 @@ Usage: S3ProxyServer [-h] [--diagnose] [--[no-]coap] [--wildcard-interface |
                      [--s3-access-key=<accessKey> --s3-secret=<secret>])]
                      [--user-file=<file> [--user-file-password64=<password64>]]
                      [--config-file=<file>
-                     [--config-file-password64=<password64>]]])
+                     [--config-file-password64=<password64>]]
+                     [--http-forward=<httpForward>
+                     [--http-authentication=<httpAuthentication>]
+                     [--http-device-identity-mode=<httpDeviceIdentityMode>]]])
                      [[--spa-script=<singlePageApplicationScript>]
                      [--spa-css=<singlePageApplicationCss>] [--spa-reload]
                      [--spa-s3]]
@@ -118,6 +124,13 @@ Usage: S3ProxyServer [-h] [--diagnose] [--[no-]coap] [--wildcard-interface |
       --domain-file-password64=<password64>
                              Password for domain-store. Base 64 encoded.
   -h, --help                 display a help message
+      --http-authentication=<httpAuthentication>
+                             Http authentication for forward coap-requests.
+      --http-device-identity-mode=<httpDeviceIdentityMode>
+                             Http device identity mode. Supported values: NONE,
+                               HEADLINE and QUERY_PARAMETER.
+      --http-forward=<httpForward>
+                             Http destination to forward coap-requests.
       --https-credentials=<credentials>
                              Folder containing https credentials in 'privkey.
                                pem' and 'fullchain.pem'.
@@ -132,6 +145,10 @@ Usage: S3ProxyServer [-h] [--diagnose] [--[no-]coap] [--wildcard-interface |
       --[no-]ipv4            enable coap endpoints for ipv4.
       --[no-]ipv6            enable coap endpoints for ipv6.
       --[no-]loopback        enable coap endpoints on loopback network.
+      --provisioning         enable 'prov'-resource for auto-provisioning.
+      --replace              replaces previous device credentials entries with
+                               new entries. For use during development. Don't
+                               use it for production!
       --s3-access-key=<accessKey>
                              s3 access key.
       --s3-acl=<acl>         s3 canned acl. e.g. public-read
@@ -474,7 +491,16 @@ config_store = configs.txt
 user_store = users.txt
 ```
 
-The data-section configures the S3-bucket the device data is forwarded to. It's also possible to host javascript- and css-files of the web application there using a `[web]` section, which defines the domain for that web resources. The management-section contains the file- or resource-names for the devices-definitions, the web-application-users and the web-application-configurations. It may also contain a S3 bucket definition. Without a S3 bucket definition in the management-section, the management files are read from the file-system instead of S3.
+The data-section configures the S3-bucket the device data is forwarded to. It's also possible to host javascript- and css-files of the web application there using a `[web]` section, which defines the domain for that web resources. The management-section contains the file- or resource-names for the devices-definitions, the web-application-users and the web-application-configurations. It may also contain a S3 bucket definition. Without a S3 bucket definition in the management-section, the management files are read from the file-system instead of S3. Additionally the destination of the CoAP-2-HTTP cross proxy and the authentication credentials for that are provided in the management-section by the values of `http_forward` and `http_authentication`.
+
+```
+http_forward = https://<destination>
+http_authentication = Bearer <token>
+# or
+http_authentication = <username>:<password>
+```
+
+If `auto-provisioning` is enabled and a domain contains `auto-provisioning` credentials, then you may enable replacing previous device credentials entries with new entries. Add therefore `devices_replaced = true`, but only for development. Don't use that in production!
 
 Creating a device domain is for now not fully automated. The [installation script](./service/cloud-installs/deploy-dev.sh) offers two jobs for that, the "create-devdom" and "delete-devdom" (currently only ExoScale). Both requires to export the device-domain name set to `devicedomain` before calling the script.
 
@@ -500,7 +526,11 @@ A device POST its data to the "coaps://${host}/devices". Using query parameters 
 
     - **CUSTOM_OPTION_READ_ETAG** 65004: contains the ETAG from or for the piggybacked read. If the device receives a fresh content, then also a fresh ETAG is received. If that is used for further piggybacked reads, then only an updated content will be sent back.
 
-    - **CUSTOM_OPTION_READ_CODE** 65008: contains the response code for the piggybacked read.
+    - **CUSTOM_OPTION_READ_CODE** 65008: contains the response code of the piggybacked read.
+
+- **forward** forward the request using a CoAP-2-HTTP cross proxy. Requires the HTTP destination to be configured.
+
+    - **CUSTOM_OPTION_FORWARD_CODE** 65016: contains the response code of the forwarded HTTP request.
 
 - **CUSTOM_OPTION_TIME** 65000: in request, it contains the device time in milliseconds since 1970.1.1. If {@code 0}, the device has no system time yet. In response it contains the system time, also in milliseconds since 1970.1.1 of the server, if that differs for more than 5s. Intended to sync the device time with the server time, if RTT is small enough and no retransmission is used..
 
