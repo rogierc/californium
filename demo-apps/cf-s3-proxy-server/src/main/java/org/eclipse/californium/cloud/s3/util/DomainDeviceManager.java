@@ -15,10 +15,11 @@
 package org.eclipse.californium.cloud.s3.util;
 
 import java.net.InetSocketAddress;
+import java.net.URISyntaxException;
 import java.security.Principal;
-import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.util.Arrays;
+import java.security.cert.X509Certificate;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -28,44 +29,44 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
 
 import javax.crypto.SecretKey;
-import javax.security.auth.x500.X500Principal;
 
+import org.eclipse.californium.cloud.s3.forward.BasicHttpForwardConfiguration;
+import org.eclipse.californium.cloud.s3.forward.HttpForwardConfiguration;
+import org.eclipse.californium.cloud.s3.forward.HttpForwardConfigurationProvider;
+import org.eclipse.californium.cloud.util.DeviceIdentifier;
 import org.eclipse.californium.cloud.util.DeviceManager;
 import org.eclipse.californium.cloud.util.DeviceParser;
 import org.eclipse.californium.cloud.util.DeviceParser.Device;
+import org.eclipse.californium.cloud.util.PrincipalInfo;
 import org.eclipse.californium.cloud.util.ResourceStore;
 import org.eclipse.californium.cloud.util.ResultConsumer;
 import org.eclipse.californium.cloud.util.ResultConsumer.ResultCode;
-import org.eclipse.californium.elements.EndpointContext;
 import org.eclipse.californium.elements.auth.AdditionalInfo;
+import org.eclipse.californium.elements.auth.ApplicationPrincipal;
 import org.eclipse.californium.elements.auth.ExtensiblePrincipal;
-import org.eclipse.californium.scandium.dtls.AlertMessage;
-import org.eclipse.californium.scandium.dtls.AlertMessage.AlertDescription;
-import org.eclipse.californium.scandium.dtls.AlertMessage.AlertLevel;
-import org.eclipse.californium.scandium.dtls.CertificateMessage;
+import org.eclipse.californium.elements.util.CertPathUtil;
+import org.eclipse.californium.elements.util.SslContextUtil.Credentials;
 import org.eclipse.californium.scandium.dtls.CertificateType;
-import org.eclipse.californium.scandium.dtls.CertificateVerificationResult;
 import org.eclipse.californium.scandium.dtls.ConnectionId;
-import org.eclipse.californium.scandium.dtls.HandshakeException;
 import org.eclipse.californium.scandium.dtls.HandshakeResultHandler;
 import org.eclipse.californium.scandium.dtls.PskPublicInformation;
 import org.eclipse.californium.scandium.dtls.PskSecretResult;
-import org.eclipse.californium.scandium.dtls.pskstore.AdvancedPskStore;
+import org.eclipse.californium.scandium.dtls.pskstore.PskStore;
 import org.eclipse.californium.scandium.dtls.x509.CertificateProvider;
-import org.eclipse.californium.scandium.dtls.x509.NewAdvancedCertificateVerifier;
-import org.eclipse.californium.scandium.util.SecretUtil;
+import org.eclipse.californium.scandium.dtls.x509.CertificateVerifier;
 import org.eclipse.californium.scandium.util.ServerNames;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * Domain device manager.
- * 
+ * <p>
  * Organize devices into separate domains.
  * 
  * @since 3.12
  */
-public class DomainDeviceManager extends DeviceManager implements DeviceGroupProvider {
+public class DomainDeviceManager extends DeviceManager
+		implements DeviceGroupProvider, DomainPrincipalInfoProvider, HttpForwardConfigurationProvider {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(DomainDeviceManager.class);
 
@@ -74,11 +75,6 @@ public class DomainDeviceManager extends DeviceManager implements DeviceGroupPro
 	 * info.
 	 */
 	public static final String DEFAULT_DOMAIN = "default";
-
-	/**
-	 * Key for domain name in additional info.
-	 */
-	public static final String INFO_DOMAIN = "domain";
 
 	/**
 	 * Map of domains.
@@ -90,22 +86,28 @@ public class DomainDeviceManager extends DeviceManager implements DeviceGroupPro
 	 * 
 	 * @param domains domains of device stores with PreSharedKey and
 	 *            RawPublicKey credentials
-	 * @param privateKey private key of DTLS 1.2 server for device communication
-	 * @param publicKey public key of DTLS 1.2 server for device communication
+	 * @param credentials server's credentials for DTLS 1.2 certificate based
+	 *            authentication
+	 * @param addTimeoutMillis timeout in milliseconds configuration values
+	 * @throws NullPointerException if domains is {@code null}
+	 * @since 4.0 (added parameter addTimeoutMillis)
 	 */
-	public DomainDeviceManager(ConcurrentMap<String, ResourceStore<DeviceParser>> domains, PrivateKey privateKey,
-			PublicKey publicKey) {
-		super(null, privateKey, publicKey);
+	public DomainDeviceManager(ConcurrentMap<String, ResourceStore<DeviceParser>> domains, Credentials credentials,
+			long addTimeoutMillis) {
+		super(null, credentials, addTimeoutMillis);
+		if (domains == null) {
+			throw new NullPointerException("domains must not be null!");
+		}
 		this.domains = domains;
 	}
 
 	@Override
-	public void add(DeviceInfo info, long time, String data, final ResultConsumer response) {
-		if (!(info instanceof DomainDeviceInfo)) {
+	public void add(PrincipalInfo info, long time, String data, final ResultConsumer response) {
+		if (!(info instanceof DomainPrincipalInfo)) {
 			response.results(ResultCode.SERVER_ERROR, "no DomainDeviceInfo.");
 			return;
 		}
-		final String domain = ((DomainDeviceInfo) info).domain;
+		final String domain = ((DomainPrincipalInfo) info).domain;
 		ResourceStore<DeviceParser> store = domains.get(domain);
 		if (store == null) {
 			response.results(ResultCode.SERVER_ERROR, "Domain " + domain + " not available.");
@@ -122,10 +124,7 @@ public class DomainDeviceManager extends DeviceManager implements DeviceGroupPro
 	}
 
 	@Override
-	public AdvancedPskStore getPskStore() {
-		if (domains == null) {
-			return null;
-		}
+	public PskStore getPskStore() {
 		if (pskStore == null) {
 			pskStore = new DevicePskStore();
 		}
@@ -133,31 +132,35 @@ public class DomainDeviceManager extends DeviceManager implements DeviceGroupPro
 	}
 
 	@Override
-	public NewAdvancedCertificateVerifier getCertificateVerifier() {
-		if (domains == null || publicKey == null || privateKey == null) {
+	public CertificateVerifier getCertificateVerifier() {
+		if (credentials == null) {
 			return null;
 		}
 		if (certificateVerifier == null) {
-			certificateVerifier = new DeviceCertificateVerifier();
+			certificateVerifier = new DomainDeviceCertificateVerifier(
+					createCertificateTypesList(credentials.hasCertificateChain()));
 		}
 		return certificateVerifier;
 	}
 
 	@Override
 	public CertificateProvider getCertificateProvider() {
-		if (domains == null || publicKey == null || privateKey == null) {
+		if (credentials == null) {
 			return null;
 		}
 		if (certificateProvider == null) {
-			certificateProvider = new ServerCertificateProvider();
+			if (certificateProvider == null) {
+				certificateProvider = new ServerCertificateProvider(
+						createCertificateTypesList(credentials.hasCertificateChain()));
+			}
 		}
 		return certificateProvider;
 	}
 
 	@Override
 	public AdditionalInfo createAdditionalInfo(Principal clientIdentity) {
-		if (domains == null) {
-			return null;
+		if (ApplicationPrincipal.ANONYMOUS.equals(clientIdentity)) {
+			return DomainApplicationAnonymous.APPL_AUTH_PRINCIPAL.getExtendedInfo();
 		}
 		for (Entry<String, ResourceStore<DeviceParser>> domain : domains.entrySet()) {
 			Device device = domain.getValue().getResource().getByPrincipal(clientIdentity);
@@ -169,7 +172,7 @@ public class DomainDeviceManager extends DeviceManager implements DeviceGroupPro
 	}
 
 	/**
-	 * Create additional info for a domain device.
+	 * Creates additional info for a domain device.
 	 * 
 	 * @param domain domain name
 	 * @param device device to create additional info
@@ -178,21 +181,57 @@ public class DomainDeviceManager extends DeviceManager implements DeviceGroupPro
 	 */
 	public AdditionalInfo createAdditionalInfo(String domain, Device device) {
 		if (device != null) {
-			Map<String, Object> info = new HashMap<>();
-			info.put(INFO_NAME, device.name);
-			info.put(INFO_GROUP, device.group);
-			info.put(INFO_DOMAIN, domain);
-			if (device.provisioning) {
-				info.put(INFO_PROVISIONING, "1");
+			if (device.ban) {
+				return AdditionalInfo.empty();
+			} else {
+				Map<String, Object> info = new HashMap<>();
+				info.put(PrincipalInfo.INFO_PROVIDER, this);
+				info.put(PrincipalInfo.INFO_NAME, device.name);
+				info.put(DomainPrincipalInfo.INFO_DOMAIN, domain);
+				return AdditionalInfo.from(info);
 			}
-			return AdditionalInfo.from(info);
 		}
 		return null;
 	}
 
 	@Override
-	public Set<String> getGroup(String domain, String group) {
-		ResourceStore<DeviceParser> resource = domains != null ? domains.get(domain) : null;
+	public DomainPrincipalInfo getPrincipalInfo(Principal principal) {
+		if (principal instanceof ExtensiblePrincipal) {
+			@SuppressWarnings("unchecked")
+			ExtensiblePrincipal<? extends Principal> extensiblePrincipal = (ExtensiblePrincipal<? extends Principal>) principal;
+			String domainName = null;
+			Device device = null;
+			if (!extensiblePrincipal.getExtendedInfo().isEmpty()) {
+				String name = extensiblePrincipal.getExtendedInfo().get(PrincipalInfo.INFO_NAME, String.class);
+				domainName = extensiblePrincipal.getExtendedInfo().get(DomainPrincipalInfo.INFO_DOMAIN, String.class);
+				DomainDeviceManager manager = extensiblePrincipal.getExtendedInfo().get(PrincipalInfo.INFO_PROVIDER,
+						DomainDeviceManager.class);
+				if (manager == this && domainName != null && name != null && !name.contains("/")) {
+					ResourceStore<DeviceParser> deviceStore = domains.get(domainName);
+					if (deviceStore != null) {
+						device = deviceStore.getResource().get(name);
+					}
+				}
+			}
+			if (device == null) {
+				for (Entry<String, ResourceStore<DeviceParser>> domain : domains.entrySet()) {
+					device = domain.getValue().getResource().getByPrincipal(principal);
+					if (device != null) {
+						domainName = domain.getKey();
+						break;
+					}
+				}
+			}
+			if (domainName != null && device != null && !device.ban) {
+				return new DomainPrincipalInfo(domainName, device.group, device.name, device.type);
+			}
+		}
+		return null;
+	}
+
+	@Override
+	public Set<DeviceIdentifier> getGroup(String domain, String group) {
+		ResourceStore<DeviceParser> resource = domains.get(domain);
 		if (resource == null) {
 			return Collections.emptySet();
 		} else {
@@ -200,10 +239,26 @@ public class DomainDeviceManager extends DeviceManager implements DeviceGroupPro
 		}
 	}
 
+	@Override
+	public HttpForwardConfiguration getConfiguration(DomainPrincipalInfo principalInfo) {
+		ResourceStore<DeviceParser> resource = domains.get(principalInfo.domain);
+		if (resource != null) {
+			Device device = resource.getResource().get(principalInfo.name);
+			if (device != null) {
+				try {
+					return BasicHttpForwardConfiguration.create(device.customFields);
+				} catch (URISyntaxException e) {
+					LOGGER.warn("Failed to configure http forward '{}'.", e.getMessage());
+				}
+			}
+		}
+		return null;
+	}
+
 	/**
 	 * PreSharedKey store for devices in domains.
 	 */
-	private class DevicePskStore implements AdvancedPskStore {
+	private class DevicePskStore implements PskStore {
 
 		private final PskPublicInformation dummy = new PskPublicInformation("dummy");
 
@@ -223,7 +278,7 @@ public class DomainDeviceManager extends DeviceManager implements DeviceGroupPro
 					Device device = resource.getResource().getByPreSharedKeyIdentity(domainName.name);
 					if (device != null) {
 						AdditionalInfo info = createAdditionalInfo(domainName.domain, device);
-						return new PskSecretResult(cid, identity, SecretUtil.create(device.pskSecret, "PSK"), info);
+						return new PskSecretResult(cid, identity, device.pskSecret, info, false, false);
 					}
 				}
 			} else {
@@ -244,10 +299,10 @@ public class DomainDeviceManager extends DeviceManager implements DeviceGroupPro
 				}
 				if (device != null) {
 					AdditionalInfo info = createAdditionalInfo(domain, device);
-					return new PskSecretResult(cid, identity, SecretUtil.create(device.pskSecret, "PSK"), info);
+					return new PskSecretResult(cid, identity, device.pskSecret, info, false, false);
 				}
 			}
-			return new PskSecretResult(cid, identity, null);
+			return new PskSecretResult(cid, identity);
 		}
 
 		@Override
@@ -263,108 +318,61 @@ public class DomainDeviceManager extends DeviceManager implements DeviceGroupPro
 	/**
 	 * Certificate verifier for devices in domains.
 	 */
-	private class DeviceCertificateVerifier implements NewAdvancedCertificateVerifier {
+	private class DomainDeviceCertificateVerifier extends DeviceCertificateVerifier {
 
-		private final List<CertificateType> supportedCertificateTypes = Arrays.asList(CertificateType.RAW_PUBLIC_KEY);
-
-		@Override
-		public List<CertificateType> getSupportedCertificateTypes() {
-			return supportedCertificateTypes;
+		private DomainDeviceCertificateVerifier(List<CertificateType> supportedCertificateTypes) {
+			super(supportedCertificateTypes);
 		}
 
 		@Override
-		public CertificateVerificationResult verifyCertificate(ConnectionId cid, ServerNames serverName,
-				InetSocketAddress remotePeer, boolean clientUsage, boolean verifySubject,
-				boolean truncateCertificatePath, CertificateMessage message) {
-			PublicKey publicKey = message.getPublicKey();
+		protected AdditionalInfo getByRawPublicKey(PublicKey publicKey) {
 			for (Entry<String, ResourceStore<DeviceParser>> domain : domains.entrySet()) {
 				Device device = domain.getValue().getResource().getByRawPublicKey(publicKey);
 				if (device != null) {
-					AdditionalInfo info = createAdditionalInfo(domain.getKey(), device);
-					return new CertificateVerificationResult(cid, publicKey, info);
+					return createAdditionalInfo(domain.getKey(), device);
 				}
 			}
-			LOGGER.warn("Certificate validation failed: Raw public key is not trusted");
-			AlertMessage alert = new AlertMessage(AlertLevel.FATAL, AlertDescription.BAD_CERTIFICATE);
-			return new CertificateVerificationResult(cid,
-					new HandshakeException("Raw public key is not trusted!", alert), null);
+			return null;
 		}
 
 		@Override
-		public List<X500Principal> getAcceptedIssuers() {
-			return Collections.emptyList();
+		protected AdditionalInfo getByX509(X509Certificate certificate) {
+			for (Entry<String, ResourceStore<DeviceParser>> domain : domains.entrySet()) {
+				Device device = domain.getValue().getResource().getByX509(certificate);
+				if (device != null) {
+					if (LOGGER.isDebugEnabled()) {
+						String cn = CertPathUtil.getSubjectsCn(certificate);
+						LOGGER.debug("x509 certificate for {}", cn);
+					}
+					return createAdditionalInfo(domain.getKey(), device);
+				}
+			}
+			if (LOGGER.isDebugEnabled()) {
+				String cn = CertPathUtil.getSubjectsCn(certificate);
+				LOGGER.debug("No x509 certificate for {}", cn);
+			}
+			return null;
 		}
 
 		@Override
-		public void setResultHandler(HandshakeResultHandler resultHandler) {
-		}
-
-	}
-
-	/**
-	 * Get device info.
-	 * 
-	 * Get device info from additional info of the principal.
-	 * 
-	 * @param principal the principal of the device
-	 * @return device info, or {@code null}, if not available.
-	 * @see EndpointContext#getPeerIdentity()
-	 */
-	public static DomainDeviceInfo getDeviceInfo(Principal principal) {
-		if (principal instanceof ExtensiblePrincipal) {
-			@SuppressWarnings("unchecked")
-			ExtensiblePrincipal<? extends Principal> extensiblePrincipal = (ExtensiblePrincipal<? extends Principal>) principal;
-			String name = extensiblePrincipal.getExtendedInfo().get(DeviceManager.INFO_NAME, String.class);
-			if (name != null && !name.contains("/")) {
-				String group = extensiblePrincipal.getExtendedInfo().get(DeviceManager.INFO_GROUP, String.class);
-				String domain = extensiblePrincipal.getExtendedInfo().get(INFO_DOMAIN, String.class);
-				String prov = extensiblePrincipal.getExtendedInfo().get(DeviceManager.INFO_PROVISIONING, String.class);
-				return new DomainDeviceInfo(domain, group, name, prov);
+		protected X509Certificate[] getTrustedCertificates() {
+			int allSize = 0;
+			List<X509Certificate[]> all = new ArrayList<>();
+			for (Entry<String, ResourceStore<DeviceParser>> domain : domains.entrySet()) {
+				X509Certificate[] trustedCertificates = domain.getValue().getResource().getTrustedCertificates();
+				all.add(trustedCertificates);
+				allSize += trustedCertificates.length;
 			}
-		}
-		return null;
-	}
 
-	/**
-	 * Domain device info.
-	 */
-	public static class DomainDeviceInfo extends DeviceInfo {
-
-		/**
-		 * Device domain.
-		 */
-		public final String domain;
-
-		/**
-		 * Create domain device info
-		 * 
-		 * @param domain domain name of device
-		 * @param group group of device
-		 * @param name name of device
-		 * @param provisioning {@code "1"}, if credentials are used for auto
-		 *            provisioning, otherwise device credentials.
-		 */
-		protected DomainDeviceInfo(String domain, String group, String name, String provisioning) {
-			super(group, name, provisioning);
-			if (domain == null) {
-				domain = DEFAULT_DOMAIN;
+			X509Certificate[] trustedCertificates = new X509Certificate[allSize];
+			int index = 0;
+			for (X509Certificate[] trusts : all) {
+				if (trusts.length > 0) {
+					System.arraycopy(trusts, 0, trustedCertificates, index, trusts.length);
+					index += trusts.length;
+				}
 			}
-			this.domain = domain;
+			return trustedCertificates;
 		}
-
-		@Override
-		public String toString() {
-			return name + "@" + domain + " (" + group + (provisioning ? ",prov)" : ")");
-		}
-	}
-
-	static {
-		setDeviceInfoProvider(new DeviceInfoProvider() {
-
-			@Override
-			public DeviceInfo getDeviceInfo(Principal principal) {
-				return DomainDeviceManager.getDeviceInfo(principal);
-			}
-		});
 	}
 }

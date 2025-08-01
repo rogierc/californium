@@ -16,9 +16,6 @@ package org.eclipse.californium.core.coap.option;
 
 import java.util.Arrays;
 
-import org.eclipse.californium.core.coap.Option;
-import org.eclipse.californium.core.coap.OptionNumberRegistry.OptionFormat;
-
 /**
  * Basic option definition.
  * 
@@ -46,13 +43,6 @@ public abstract class BaseOptionDefinition implements OptionDefinition {
 	 */
 	private final String name;
 	/**
-	 * Value format of the option.
-	 * 
-	 * @see <a href="https://www.rfc-editor.org/rfc/rfc7252#section-3.2" target=
-	 *      "_blank">RFC7252 3.2. Option Value Formats</a>
-	 */
-	private final OptionFormat format;
-	/**
 	 * Indicates, if the option is a single value option or may be used multiple
 	 * times.
 	 * 
@@ -71,19 +61,17 @@ public abstract class BaseOptionDefinition implements OptionDefinition {
 	 * 
 	 * @param number option number
 	 * @param name option name
-	 * @param format option format
 	 * @param singleValue {@code true}, if option supports a single value,
 	 *            {@code false}, if option supports multiple values.
 	 * @param lengths minimum and maximum value lengths. If only one length is
 	 *            provided, this is used for both, minimum and maximum length.
 	 */
-	protected BaseOptionDefinition(int number, String name, OptionFormat format, boolean singleValue, int[] lengths) {
+	protected BaseOptionDefinition(int number, String name, boolean singleValue, int[] lengths) {
 		if (number > 0xffff || number < 0) {
 			throw new IllegalArgumentException(number + " invalid option number!");
 		}
 		this.number = number;
 		this.name = name;
-		this.format = format;
 		this.singleValue = singleValue;
 		if (lengths == null || lengths.length == 0) {
 			// default lengths
@@ -99,46 +87,25 @@ public abstract class BaseOptionDefinition implements OptionDefinition {
 	}
 
 	@Override
-	public OptionFormat getFormat() {
-		return format;
-	}
-
-	@Override
 	public boolean isSingleValue() {
 		return singleValue;
 	}
 
 	@Override
-	public final int[] getValueLengths() {
-		return lengths;
-	}
-
-	@Override
-	public void assertValue(byte[] value) {
+	public void assertValueLength(int length) {
 		int min = lengths[0];
 		int max = lengths[1];
-		int valueLength = value.length;
-		if (getFormat() == OptionFormat.INTEGER) {
-			// skip leading 0s
-			for (byte b : value) {
-				if (b == 0) {
-					--valueLength;
-				} else {
-					break;
-				}
-			}
-		}
-		if (valueLength < min || valueLength > max) {
+		if (length < min || length > max) {
 			if (min == max) {
 				if (min == 0) {
 					throw new IllegalArgumentException(
-							"Option " + name + " value of " + valueLength + " bytes must be empty.");
+							"Option " + name + " value of " + length + " bytes must be empty.");
 				} else {
 					throw new IllegalArgumentException(
-							"Option " + name + " value of " + valueLength + " bytes must be " + min + " bytes.");
+							"Option " + name + " value of " + length + " bytes must be " + min + " bytes.");
 				}
 			} else {
-				throw new IllegalArgumentException("Option " + name + " value of " + valueLength
+				throw new IllegalArgumentException("Option " + name + " value of " + length
 						+ " bytes must be in range of [" + min + "-" + max + "] bytes.");
 			}
 		}
@@ -146,7 +113,7 @@ public abstract class BaseOptionDefinition implements OptionDefinition {
 
 	@Override
 	public String toString() {
-		return name + "/" + format;
+		return name + "/" + getFormat();
 	}
 
 	@Override
@@ -157,21 +124,6 @@ public abstract class BaseOptionDefinition implements OptionDefinition {
 	@Override
 	public String getName() {
 		return name;
-	}
-
-	@Override
-	public Option create(byte[] value) {
-		return new Option(this, value);
-	}
-
-	@Override
-	public Option create(String value) {
-		throw new IllegalArgumentException(getClass().getSimpleName() + " doesn't support string-values!");
-	}
-
-	@Override
-	public Option create(long value) {
-		throw new IllegalArgumentException(getClass().getSimpleName() + " doesn't support integer-values!");
 	}
 
 }

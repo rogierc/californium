@@ -28,6 +28,7 @@ import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.californium.TestTools;
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.CoapServer;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
@@ -39,7 +40,6 @@ import org.eclipse.californium.core.network.CoapEndpoint;
 import org.eclipse.californium.core.network.Endpoint;
 import org.eclipse.californium.core.network.EndpointManager;
 import org.eclipse.californium.core.network.interceptors.HealthStatisticLogger;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.elements.Connector;
 import org.eclipse.californium.elements.DtlsEndpointContext;
 import org.eclipse.californium.elements.config.Configuration;
@@ -61,10 +61,10 @@ import org.eclipse.californium.scandium.dtls.AlertMessage;
 import org.eclipse.californium.scandium.dtls.ConnectionIdGenerator;
 import org.eclipse.californium.scandium.dtls.DebugConnectionStore;
 import org.eclipse.californium.scandium.dtls.NodeConnectionIdGenerator;
-import org.eclipse.californium.scandium.dtls.ResumptionSupportingConnectionStore;
+import org.eclipse.californium.scandium.dtls.ConnectionStore;
 import org.eclipse.californium.scandium.dtls.SingleNodeConnectionIdGenerator;
 import org.eclipse.californium.scandium.dtls.cipher.CipherSuite;
-import org.eclipse.californium.scandium.dtls.pskstore.AdvancedSinglePskStore;
+import org.eclipse.californium.scandium.dtls.pskstore.SinglePskStore;
 import org.eclipse.californium.util.nat.NioNatUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -77,6 +77,8 @@ public class NatTestHelper {
 	static final String TARGET = "resource";
 	static final String IDENITITY = "client1";
 	static final String KEY = "key1";
+
+	static final Integer DISABLE_CID = -1;
 
 	static final Integer SUPPORT_CID = 0;
 
@@ -124,6 +126,7 @@ public class NatTestHelper {
 		for (CoapEndpoint endpoint : clientEndpoints) {
 			endpoint.destroy();
 		}
+		EndpointManager.reset();
 	}
 
 	void forceResumption(List<Integer> resumeEndpoints, int percent) throws InterruptedException {
@@ -218,7 +221,7 @@ public class NatTestHelper {
 	}
 
 	void createSecureServer(Integer cidLength) throws IOException {
-		ConnectionIdGenerator cidGenerator = cidLength == null ? null : new SingleNodeConnectionIdGenerator(cidLength);
+		ConnectionIdGenerator cidGenerator = (cidLength == null || cidLength < 0) ? null : new SingleNodeConnectionIdGenerator(cidLength);
 		createSecureServer(cidGenerator);
 	}
 
@@ -239,12 +242,12 @@ public class NatTestHelper {
 					.set(DtlsConfig.DTLS_STALE_CONNECTION_THRESHOLD, 20, TimeUnit.SECONDS)
 					.set(DtlsConfig.DTLS_RECEIVER_THREAD_COUNT, 2)
 					.set(DtlsConfig.DTLS_CONNECTOR_THREAD_COUNT, 4)
-					.set(DtlsConfig.DTLS_VERIFY_PEERS_ON_RESUMPTION_THRESHOLD, 100)
+					.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, -1)
 					.setAddress(TestTools.LOCALHOST_EPHEMERAL)
 					.setLoggingTag(tag)
 					.setHealthHandler(health)
 					.setConnectionIdGenerator(generator)
-					.setAdvancedPskStore(pskStore).build();
+					.setPskStore(pskStore).build();
 
 			DebugConnectionStore serverConnectionStore = ConnectorHelper.createDebugConnectionStore(dtlsConfig);
 			this.serverConnections.add(serverConnectionStore);
@@ -298,12 +301,12 @@ public class NatTestHelper {
 				.set(DtlsConfig.DTLS_MAX_CONNECTIONS, 20)
 				.set(DtlsConfig.DTLS_RECEIVER_THREAD_COUNT, 2)
 				.set(DtlsConfig.DTLS_CONNECTOR_THREAD_COUNT, 2)
-				.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, cidLength)
+				.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, cidLength == null ? -1 : cidLength)
 				.setAddress(TestTools.LOCALHOST_EPHEMERAL)
 				.setLoggingTag(tag)
 				.setHealthHandler(health)
 				.setAsList(DtlsConfig.DTLS_CIPHER_SUITES, CipherSuite.TLS_PSK_WITH_AES_128_CCM_8)
-				.setAdvancedPskStore(new AdvancedSinglePskStore(IDENITITY + "." + size, KEY.getBytes())).build();
+				.setPskStore(new SinglePskStore(IDENITITY + "." + size, KEY.getBytes())).build();
 
 		DebugConnectionStore clientConnectionStore = ConnectorHelper.createDebugConnectionStore(clientDtlsConfig);
 
@@ -446,7 +449,7 @@ public class NatTestHelper {
 
 	private static class MyDtlsConnector extends DTLSConnector {
 
-		public MyDtlsConnector(DtlsConnectorConfig configuration, ResumptionSupportingConnectionStore connectionStore) {
+		public MyDtlsConnector(DtlsConnectorConfig configuration, ConnectionStore connectionStore) {
 			super(configuration, connectionStore);
 
 		}
@@ -455,7 +458,7 @@ public class NatTestHelper {
 	private static class MyDtlsClusterConnector extends DtlsManagedClusterConnector {
 
 		public MyDtlsClusterConnector(DtlsConnectorConfig configuration,
-				DtlsClusterConnectorConfig clusterConfiguration, ResumptionSupportingConnectionStore connectionStore) {
+				DtlsClusterConnectorConfig clusterConfiguration, ConnectionStore connectionStore) {
 			super(configuration, clusterConfiguration, connectionStore);
 		}
 	}

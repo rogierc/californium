@@ -14,7 +14,9 @@
  ********************************************************************************/
 package org.eclipse.californium.core.coap.option;
 
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -102,6 +104,28 @@ public class MapBasedOptionRegistry implements OptionRegistry {
 	}
 
 	/**
+	 * Create option definition map from option registries and definitions.
+	 * 
+	 * @param registries option registries to add.
+	 * @param definitions option definitions to add.
+	 * @see Builder
+	 * @since 4.0
+	 */
+	public MapBasedOptionRegistry(List<OptionRegistry> registries, List<OptionDefinition> definitions) {
+		try {
+			for (OptionRegistry reg : registries) {
+				add(reg);
+			}
+			for (OptionDefinition definition : definitions) {
+				put(definition);
+			}
+		} catch (IllegalArgumentException ex) {
+			LOGGER.error("{}", ex.getMessage());
+			throw ex;
+		}
+	}
+
+	/**
 	 * Add option registry.
 	 * 
 	 * @param registry option registry to add.
@@ -144,7 +168,7 @@ public class MapBasedOptionRegistry implements OptionRegistry {
 		OptionDefinition current = numberMap.get(key);
 		if (current != null) {
 			throw new IllegalArgumentException(
-					"Number " + definition.getNumber() + " already in use for " + current.getName());
+					definition.getName() +  " " + definition.getNumber() + "/0x" + Integer.toHexString(definition.getNumber()) + " already in use for " + current.getName());
 		}
 		current = nameMap.get(definition.getName());
 		if (current != null) {
@@ -155,57 +179,16 @@ public class MapBasedOptionRegistry implements OptionRegistry {
 		nameMap.put(definition.getName(), definition);
 	}
 
-	/**
-	 * {@inheritDoc}
-	 * 
-	 * Calls {@link #getCustomDefinition(int)} on missing none code specific
-	 * definition. Legacy support adds either a {@code CustomOptionDefinition},
-	 * if missing and supported by {@code CustomOptionNumberRegistry}, or
-	 * returns a ephemeral {@code UnspecificOptionDefinition}, if
-	 * {@code #supportUndefinedOptions} is enabled.
-	 */
 	@Override
 	public OptionDefinition getDefinitionByNumber(int code, int optionNumber) {
 		int key = getExtendedNumber(code, optionNumber);
-		OptionDefinition defintion = getInternal(key);
-		if (defintion == null && key == optionNumber) {
-			defintion = getCustomDefinition(optionNumber);
-		}
-		return defintion;
+		return getInternal(key);
 	}
 
-	/**
-	 * {@inheritDoc}
-	 * 
-	 * Calls {@link #getCustomDefinition(int)} on missing definition. Legacy
-	 * support adds either a {@code CustomOptionDefinition}, if missing and
-	 * supported by {@code CustomOptionNumberRegistry}, or returns a ephemeral
-	 * {@code UnspecificOptionDefinition}, if {@code #supportUndefinedOptions}
-	 * is enabled.
-	 */
 	@Override
 	public OptionDefinition getDefinitionByNumber(int optionNumber) {
 		int key = getExtendedNumber(0, optionNumber);
-		OptionDefinition defintion = getInternal(key);
-		if (defintion == null) {
-			defintion = getCustomDefinition(optionNumber);
-		}
-		return defintion;
-	}
-
-	/**
-	 * Get custom definition.
-	 * 
-	 * Intended to be overwritten, if legacy support for custom definitions is
-	 * required.
-	 * 
-	 * @param optionNumber option number
-	 * @return option definition
-	 * @deprecated please add used option definition before using it
-	 */
-	@Deprecated
-	protected OptionDefinition getCustomDefinition(int optionNumber) {
-		return null;
+		return getInternal(key);
 	}
 
 	/**
@@ -312,6 +295,69 @@ public class MapBasedOptionRegistry implements OptionRegistry {
 			return (optionNumber & 0xffff) + (code << 16);
 		} else {
 			return optionNumber;
+		}
+	}
+
+	/**
+	 * Creates builder.
+	 * 
+	 * @return created builder.
+	 * @since 4.0
+	 */
+	public static Builder builder() {
+		return new Builder();
+	}
+
+	/**
+	 * {@link OptionRegistry} Builder.
+	 * <p>
+	 * Creates a {@link MapBasedOptionRegistry} from lists of registries and
+	 * definitions.
+	 * 
+	 * @since 4.0
+	 */
+	public static class Builder {
+
+		/**
+		 * List of {@link OptionRegistry}.
+		 */
+		private final List<OptionRegistry> registries = new ArrayList<>();
+		/**
+		 * List of {@link OptionDefinition}.
+		 */
+		private final List<OptionDefinition> definitions = new ArrayList<>();
+
+		/**
+		 * Adds option registry.
+		 * 
+		 * @param registry option registry
+		 * @return this builder for command chaining
+		 */
+		public Builder add(OptionRegistry registry) {
+			this.registries.add(registry);
+			return this;
+		}
+
+		/**
+		 * Adds option definitions.
+		 * 
+		 * @param definitions option definitions
+		 * @return this builder for command chaining
+		 */
+		public Builder add(OptionDefinition... definitions) {
+			for (OptionDefinition def : definitions) {
+				this.definitions.add(def);
+			}
+			return this;
+		}
+
+		/**
+		 * Builds option registry with added registries and definitions.
+		 * 
+		 * @return built option registry.
+		 */
+		public OptionRegistry build() {
+			return new MapBasedOptionRegistry(registries, definitions);
 		}
 	}
 }

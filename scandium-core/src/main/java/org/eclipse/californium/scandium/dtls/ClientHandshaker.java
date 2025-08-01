@@ -62,7 +62,6 @@ import org.eclipse.californium.scandium.config.DtlsConfig.DtlsSecureRenegotiatio
 import org.eclipse.californium.scandium.config.DtlsConnectorConfig;
 import org.eclipse.californium.scandium.dtls.AlertMessage.AlertDescription;
 import org.eclipse.californium.scandium.dtls.AlertMessage.AlertLevel;
-import org.eclipse.californium.scandium.dtls.HelloExtension.ExtensionType;
 import org.eclipse.californium.scandium.dtls.MaxFragmentLengthExtension.Length;
 import org.eclipse.californium.scandium.dtls.SupportedPointFormatsExtension.ECPointFormat;
 import org.eclipse.californium.scandium.dtls.cipher.CipherSuite;
@@ -165,11 +164,6 @@ public class ClientHandshaker extends Handshaker {
 	private ProtocolVersion maxProtocolVersion = ProtocolVersion.VERSION_DTLS_1_2;
 
 	/**
-	 * Indicates probing for this handshake.
-	 */
-	private boolean probe;
-
-	/**
 	 * Indicates received server hello done.
 	 * 
 	 * @since 3.0
@@ -252,14 +246,6 @@ public class ClientHandshaker extends Handshaker {
 	protected final List<CertificateType> supportedServerCertificateTypes;
 
 	/**
-	 * Use the deprecated CID extension before version 9 of <a href=
-	 * "https://datatracker.ietf.org/doc/draft-ietf-tls-dtls-connection-id/"
-	 * target="_blank">Draft dtls-connection-id</a>.
-	 * 
-	 * @since 3.0
-	 */
-	private final Integer useDeprecatedCid;
-	/**
 	 * Verify the server certificate's subject.
 	 * 
 	 * @see DtlsConfig#DTLS_VERIFY_SERVER_CERTIFICATES_SUBJECT
@@ -285,14 +271,11 @@ public class ClientHandshaker extends Handshaker {
 	 * @param timer scheduled executor for flight retransmission (since 2.4).
 	 * @param connection the connection related with the session.
 	 * @param config the DTLS configuration.
-	 * @param probe {@code true} enable probing for this handshake,
-	 *            {@code false}, not probing handshake.
 	 * @throws NullPointerException if any of the provided parameter is
 	 *             {@code null}, except the hostname.
 	 */
-	@SuppressWarnings("deprecation")
 	public ClientHandshaker(String hostname, RecordLayer recordLayer, ScheduledExecutorService timer,
-			Connection connection, DtlsConnectorConfig config, boolean probe) {
+			Connection connection, DtlsConnectorConfig config) {
 		super(0, 0, recordLayer, timer, connection, config);
 
 		List<CipherSuite> cipherSuites = config.getSupportedCipherSuites();
@@ -313,9 +296,7 @@ public class ClientHandshaker extends Handshaker {
 		this.supportedServerCertificateTypes = config.getTrustCertificateTypes();
 		this.supportedClientCertificateTypes = config.getIdentityCertificateTypes();
 		this.supportedSignatureAlgorithms = config.getSupportedSignatureAlgorithms();
-		this.useDeprecatedCid = config.get(DtlsConfig.DTLS_USE_DEPRECATED_CID);
 		this.verifyServerCertificatesSubject = config.get(DtlsConfig.DTLS_VERIFY_SERVER_CERTIFICATES_SUBJECT);
-		this.probe = probe;
 		getSession().setHostName(hostname);
 	}
 
@@ -476,7 +457,6 @@ public class ClientHandshaker extends Handshaker {
 			DTLSContext context = getDtlsContext();
 			context.setWriteConnectionId(connectionId);
 			context.setReadConnectionId(getReadConnectionId());
-			context.setDeprecatedCid(extension.useDeprecatedCid());
 		}
 	}
 
@@ -973,13 +953,7 @@ public class ClientHandshaker extends Handshaker {
 				// use empty cid
 				connectionId = ConnectionId.EMPTY;
 			}
-			ExtensionType cidType;
-			if (useDeprecatedCid  != null) {
-				cidType = ExtensionType.getExtensionTypeById(useDeprecatedCid);
-			} else {
-				cidType = ExtensionType.CONNECTION_ID;
-			}
-			ConnectionIdExtension extension = ConnectionIdExtension.fromConnectionId(connectionId, cidType);
+			ConnectionIdExtension extension = ConnectionIdExtension.fromConnectionId(connectionId);
 			helloMessage.addExtension(extension);
 		}
 	}
@@ -1008,7 +982,7 @@ public class ClientHandshaker extends Handshaker {
 			LOGGER.warn(
 					"client is configured to use SNI but server does not support it, PSK authentication is likely to fail");
 		}
-		PskPublicInformation pskIdentity = advancedPskStore.getIdentity(getPeerAddress(), serverName);
+		PskPublicInformation pskIdentity = pskStore.getIdentity(getPeerAddress(), serverName);
 		// look up identity in scope of virtual host
 		if (pskIdentity == null) {
 			AlertMessage alert = new AlertMessage(AlertLevel.FATAL, AlertDescription.INTERNAL_ERROR);
@@ -1021,25 +995,5 @@ public class ClientHandshaker extends Handshaker {
 			}
 		}
 		return pskIdentity;
-	}
-
-	@Override
-	public boolean isProbing() {
-		return probe;
-	}
-
-	@Override
-	public void resetProbing() {
-		probe = false;
-	}
-
-	/**
-	 * {@inheritDoc}
-	 * 
-	 * Connections of probing handshakes are not intended to be removed.
-	 */
-	@Override
-	public boolean isRemovingConnection() {
-		return !probe && super.isRemovingConnection();
 	}
 }

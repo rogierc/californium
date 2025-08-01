@@ -42,7 +42,7 @@ import org.eclipse.californium.scandium.config.DtlsConfig;
 import org.eclipse.californium.scandium.config.DtlsConnectorConfig;
 import org.eclipse.californium.scandium.config.DtlsConfig.DtlsRole;
 import org.eclipse.californium.scandium.dtls.cipher.CipherSuite;
-import org.eclipse.californium.scandium.dtls.pskstore.AdvancedSinglePskStore;
+import org.eclipse.californium.scandium.dtls.pskstore.SinglePskStore;
 
 public class SecureClient {
 	private static final File CONFIG_FILE = new File("Californium3SecureClient.properties");
@@ -53,17 +53,13 @@ public class SecureClient {
 		DtlsConfig.register();
 	}
 
-	private static DefinitionsProvider DEFAULTS = new DefinitionsProvider() {
-
-		@Override
-		public void applyDefinitions(Configuration config) {
-			config.set(CoapConfig.MAX_ACTIVE_PEERS, 10);
-			config.set(DtlsConfig.DTLS_ROLE, DtlsRole.CLIENT_ONLY);
-			config.set(DtlsConfig.DTLS_USE_SERVER_NAME_INDICATION, false);
-			config.set(DtlsConfig.DTLS_RECOMMENDED_CIPHER_SUITES_ONLY, false);
-			config.set(DtlsConfig.DTLS_PRESELECTED_CIPHER_SUITES, CipherSuite.STRONG_ENCRYPTION_PREFERENCE);
-			config.setTransient(DtlsConfig.DTLS_CIPHER_SUITES);
-		}
+	private static DefinitionsProvider DEFAULTS = (config) -> {
+		config.set(CoapConfig.MAX_ACTIVE_PEERS, 10);
+		config.set(DtlsConfig.DTLS_ROLE, DtlsRole.CLIENT_ONLY);
+		config.set(DtlsConfig.DTLS_USE_SERVER_NAME_INDICATION, false);
+		config.set(DtlsConfig.DTLS_RECOMMENDED_CIPHER_SUITES_ONLY, false);
+		config.set(DtlsConfig.DTLS_PRESELECTED_CIPHER_SUITES, CipherSuite.STRONG_ENCRYPTION_PREFERENCE);
+		config.setTransient(DtlsConfig.DTLS_CIPHER_SUITES);
 	};
 
 	public static final List<Mode> SUPPORTED_MODES = Arrays.asList(Mode.PSK, Mode.ECDHE_PSK, Mode.RPK, Mode.X509,
@@ -130,7 +126,7 @@ public class SecureClient {
 		CredentialsUtil.setupCid(args, builder);
 		List<Mode> modes = CredentialsUtil.parse(args, CredentialsUtil.DEFAULT_CLIENT_MODES, SUPPORTED_MODES);
 		if (modes.contains(CredentialsUtil.Mode.PSK) || modes.contains(CredentialsUtil.Mode.ECDHE_PSK)) {
-			builder.setAdvancedPskStore(new AdvancedSinglePskStore(CredentialsUtil.OPEN_PSK_IDENTITY, CredentialsUtil.OPEN_PSK_SECRET));
+			builder.setPskStore(new SinglePskStore(CredentialsUtil.OPEN_PSK_IDENTITY, CredentialsUtil.OPEN_PSK_SECRET));
 		}
 		CredentialsUtil.setupCredentials(builder, CredentialsUtil.CLIENT_NAME, modes);
 		// uncomment next line to load pem file for the example

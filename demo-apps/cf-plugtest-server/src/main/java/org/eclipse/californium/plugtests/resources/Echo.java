@@ -37,6 +37,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.coap.LinkFormat;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
@@ -44,7 +45,6 @@ import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.coap.UriQueryParameter;
 import org.eclipse.californium.core.config.CoapConfig;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.core.server.resources.Resource;
 import org.eclipse.californium.core.server.resources.ResourceAttributes;
 import org.eclipse.californium.elements.config.Configuration;
@@ -170,6 +170,7 @@ public class Echo extends CoapResource {
 			Response response = new Response(CONTENT);
 			response.setPayload(LinkFormat.serializeTree(this));
 			response.getOptions().setContentFormat(APPLICATION_LINK_FORMAT);
+			response.getOptions().setMaxAge(0);
 			exchange.respond(response);
 		}
 	}
@@ -223,6 +224,7 @@ public class Echo extends CoapResource {
 		if (length > payload.length) {
 			Arrays.fill(responsePayload, payload.length, length, (byte) '*');
 		}
+		String location = null;
 		if (keep) {
 			String principal = getPrincipalName(request);
 			if (principal == null) {
@@ -242,6 +244,7 @@ public class Echo extends CoapResource {
 						child.setParent(this);
 						keptPosts.put(principal, child);
 					}
+					location = child.getURI();
 				} finally {
 					lock.unlock();
 				}
@@ -251,6 +254,9 @@ public class Echo extends CoapResource {
 		final Response response = new Response(CHANGED);
 		response.setPayload(responsePayload);
 		response.getOptions().setContentFormat(responseFormat);
+		if (location != null) {
+			response.getOptions().setLocationPath(location);
+		}
 		if (delay > 0 && executor != null) {
 			boolean schedule = false;
 			if (pendingResponses.get() < MAX_PENDING_RESPONSES - 1) {
@@ -331,6 +337,7 @@ public class Echo extends CoapResource {
 			Response response = new Response(CONTENT);
 			response.setPayload(devicePost.getPayload());
 			response.getOptions().setContentFormat(accept);
+			response.getOptions().setMaxAge(0);
 			exchange.respond(response);
 		}
 

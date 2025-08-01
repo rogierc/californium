@@ -18,21 +18,21 @@ package org.eclipse.californium.extplugtests.resources;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.BAD_OPTION;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.CHANGED;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.CONTENT;
-import static org.eclipse.californium.core.coap.CoAP.ResponseCode.NOT_ACCEPTABLE;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.NOT_IMPLEMENTED;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.TEXT_PLAIN;
-import static org.eclipse.californium.core.coap.MediaTypeRegistry.UNDEFINED;
 
 import java.util.Arrays;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.UriQueryParameter;
-import org.eclipse.californium.core.server.resources.CoapExchange;
+import org.eclipse.californium.elements.auth.ApplicationAuthorizer;
+import org.eclipse.californium.elements.auth.ApplicationPrincipal;
 
 /**
  * Benchmark resource.
@@ -51,11 +51,15 @@ public class Benchmark extends CoapResource {
 	 */
 	private static final String URI_QUERY_OPTION_ACK = "ack";
 	/**
+	 * URI query parameter to use application level authorization.
+	 */
+	private static final String URI_QUERY_OPTION_AUTH = "auth";
+	/**
 	 * Supported query parameter.
 	 * 
 	 * @since 3.2
 	 */
-	private static final List<String> SUPPORTED = Arrays.asList(URI_QUERY_OPTION_ACK, URI_QUERY_OPTION_RESPONSE_LENGTH);
+	private static final List<String> SUPPORTED = Arrays.asList(URI_QUERY_OPTION_ACK, URI_QUERY_OPTION_RESPONSE_LENGTH, URI_QUERY_OPTION_AUTH);
 
 	/**
 	 * Default response.
@@ -105,7 +109,7 @@ public class Benchmark extends CoapResource {
 			Timer timer = new Timer("OBSERVE", true);
 			timer.schedule(new TimeTask(), 0, notifyIntervalMillis);
 		}
-		getAttributes().addContentType(TEXT_PLAIN);
+		addSupportedContentFormats(TEXT_PLAIN);
 	}
 
 	@Override
@@ -129,23 +133,25 @@ public class Benchmark extends CoapResource {
 		// get request to read out details
 		Request request = exchange.advanced().getRequest();
 
-		int accept = request.getOptions().getAccept();
-		if (accept != UNDEFINED && accept != TEXT_PLAIN) {
-			exchange.respond(NOT_ACCEPTABLE);
-			return;
-		}
-
 		boolean ack = false;
+		boolean auth = false;
 		int length = 0;
 		try {
 			UriQueryParameter helper = request.getOptions().getUriQueryParameter(SUPPORTED);
 			ack = helper.hasParameter(URI_QUERY_OPTION_ACK);
+			auth = helper.hasParameter(URI_QUERY_OPTION_AUTH);
 			length = helper.getArgumentAsInteger(URI_QUERY_OPTION_RESPONSE_LENGTH, 0, 0, maxResourceSize);
 		} catch (IllegalArgumentException ex) {
 			exchange.respond(BAD_OPTION, ex.getMessage());
 			return;
 		}
 
+		if (auth && exchange.getSourcePrincipal() == null) {
+			ApplicationAuthorizer authorizer = exchange.getApplicationAuthorizer();
+			if (authorizer != null) {
+				authorizer.authorize(exchange.getSourceContext(), ApplicationPrincipal.ANONYMOUS);
+			}
+		}
 		if (ack) {
 			exchange.accept();
 		}

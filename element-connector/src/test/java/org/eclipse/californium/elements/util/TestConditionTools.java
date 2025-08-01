@@ -17,11 +17,12 @@
 
 package org.eclipse.californium.elements.util;
 
+import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
 
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
-import org.hamcrest.Description;
 import org.hamcrest.Matcher;
 
 /**
@@ -37,7 +38,7 @@ public final class TestConditionTools {
 
 	/**
 	 * Wait for condition to come {@code true}.
-	 * 
+	 * <p>
 	 * Used for none notifying conditions, which must be polled.
 	 * 
 	 * @param timeout timeout in {@code unit}
@@ -48,7 +49,7 @@ public final class TestConditionTools {
 	 *         {@code false} otherwise.
 	 * @throws InterruptedException if the Thread is interrupted.
 	 */
-	public static boolean waitForCondition(long timeout, long interval, TimeUnit unit, TestCondition check)
+	public static boolean waitForCondition(long timeout, long interval, TimeUnit unit, BooleanSupplier check)
 			throws InterruptedException {
 		if (0 >= timeout) {
 			throw new IllegalArgumentException("timeout must be greather than 0!");
@@ -63,7 +64,7 @@ public final class TestConditionTools {
 		long sleepTimeInMilliseconds = unit.toMillis(interval);
 		long end = System.nanoTime() + unit.toNanos(timeout);
 		while (0 < leftTimeInMilliseconds) {
-			if (check.isFulFilled()) {
+			if (check.getAsBoolean()) {
 				return true;
 			}
 			Thread.sleep(sleepTimeInMilliseconds);
@@ -72,68 +73,25 @@ public final class TestConditionTools {
 				sleepTimeInMilliseconds = leftTimeInMilliseconds;
 			}
 		}
-		return check.isFulFilled();
+		return check.getAsBoolean();
 	}
 
 	/**
-	 * Get in range matcher.
+	 * Assert condition to come {@code true}.
+	 * <p>
+	 * Used for none notifying conditions, which must be polled.
 	 * 
-	 * @param <T> type of values.
-	 * @param min inclusive minimum value
-	 * @param max exclusive maximum value
-	 * @return matcher.
-	 * @throws IllegalArgumentException if min is not less than max
+	 * @param timeout timeout in {@code unit}
+	 * @param interval interval of condition check in {@code unit}
+	 * @param unit time units for {@code timeout} and {@code interval}
+	 * @param check callback for condition test
+	 * @throws InterruptedException if the Thread is interrupted.
+	 * @throws AssertionError if assertion has failed
+	 * @since 4.0
 	 */
-	public static <T extends Number> org.hamcrest.Matcher<T> inRange(T min, T max) {
-		return new InRange<T>(min, max);
-	}
-
-	/**
-	 * In range matcher.
-	 * 
-	 * @see TestConditionTools#inRange(Number, Number)
-	 */
-	private static class InRange<T extends Number> extends org.hamcrest.BaseMatcher<T> {
-
-		private final Number min;
-		private final Number max;
-
-		private InRange(Number min, Number max) {
-			if (min instanceof Float || min instanceof Double) {
-				if (min.doubleValue() >= max.doubleValue()) {
-					throw new IllegalArgumentException("Min " + min + " must be less than max " + max + "!");
-				}
-			} else {
-				if (min.longValue() >= max.longValue()) {
-					throw new IllegalArgumentException("Min " + min + " must be less than max " + max + "!");
-				}
-			}
-			this.min = min;
-			this.max = max;
-		}
-
-		@Override
-		public boolean matches(Object item) {
-			if (!min.getClass().equals(item.getClass())) {
-				throw new IllegalArgumentException("value type " + item.getClass().getSimpleName()
-						+ " doesn't match range type " + min.getClass().getSimpleName());
-			}
-			Number value = (Number) item;
-			if (item instanceof Float || item instanceof Double) {
-				return min.doubleValue() <= value.doubleValue() && value.doubleValue() < max.doubleValue();
-			} else {
-				return min.longValue() <= value.longValue() && value.longValue() < max.longValue();
-			}
-		}
-
-		@Override
-		public void describeTo(Description description) {
-			description.appendText("range[");
-			description.appendText(min.toString());
-			description.appendText("-");
-			description.appendText(max.toString());
-			description.appendText(")");
-		}
+	public static void assertCondition(long timeout, long interval, TimeUnit unit, BooleanSupplier check)
+			throws InterruptedException {
+		assertThat(waitForCondition(timeout, interval, unit, check), is(true));
 	}
 
 	/**
@@ -146,6 +104,7 @@ public final class TestConditionTools {
 	 * @param timeout timeout to match
 	 * @param unit unit of timeout
 	 * @throws InterruptedException if wait is interrupted.
+	 * @throws AssertionError if assertion has failed
 	 * @see TestConditionTools#assertStatisticCounter(CounterStatisticManager,
 	 *      String, Matcher)
 	 */
@@ -153,12 +112,8 @@ public final class TestConditionTools {
 			final Matcher<? super Long> matcher, long timeout, TimeUnit unit) throws InterruptedException {
 		if (timeout > 0) {
 			long timeoutMillis = unit.toMillis(timeout);
-			waitForCondition(timeoutMillis, timeoutMillis / 10l, TimeUnit.MILLISECONDS, new TestCondition() {
-
-				@Override
-				public boolean isFulFilled() throws IllegalStateException {
-					return matcher.matches(manager.getCounterByKey(name));
-				}
+			waitForCondition(timeoutMillis, timeoutMillis / 10l, TimeUnit.MILLISECONDS, () -> {
+				return matcher.matches(manager.getCounterByKey(name));
 			});
 		}
 		assertThat(prepareMessage(null, name, manager), manager.getCounterByKey(name), matcher);
@@ -175,6 +130,7 @@ public final class TestConditionTools {
 	 * @param timeout timeout to match
 	 * @param unit unit of timeout
 	 * @throws InterruptedException if wait is interrupted.
+	 * @throws AssertionError if assertion has failed
 	 * @see TestConditionTools#assertStatisticCounter(CounterStatisticManager,
 	 *      String, Matcher)
 	 * @since 2.4
@@ -183,12 +139,8 @@ public final class TestConditionTools {
 			final Matcher<? super Long> matcher, long timeout, TimeUnit unit) throws InterruptedException {
 		if (timeout > 0) {
 			long timeoutMillis = unit.toMillis(timeout);
-			waitForCondition(timeoutMillis, timeoutMillis / 10l, TimeUnit.MILLISECONDS, new TestCondition() {
-
-				@Override
-				public boolean isFulFilled() throws IllegalStateException {
-					return matcher.matches(manager.getCounterByKey(name));
-				}
+			waitForCondition(timeoutMillis, timeoutMillis / 10l, TimeUnit.MILLISECONDS, () -> {
+				return matcher.matches(manager.getCounterByKey(name));
 			});
 		}
 		assertThat(prepareMessage(message, name, manager), manager.getCounterByKey(name), matcher);
@@ -200,6 +152,7 @@ public final class TestConditionTools {
 	 * @param manager statistic manager
 	 * @param name name of statistic.
 	 * @param matcher matcher for statistic counter value
+	 * @throws AssertionError if assertion has failed
 	 */
 	public static void assertStatisticCounter(CounterStatisticManager manager, String name,
 			Matcher<? super Long> matcher) {
@@ -213,6 +166,7 @@ public final class TestConditionTools {
 	 * @param manager statistic manager
 	 * @param name name of statistic.
 	 * @param matcher matcher for statistic counter value
+	 * @throws AssertionError if assertion has failed
 	 * @since 2.4
 	 */
 	public static void assertStatisticCounter(String message, CounterStatisticManager manager, String name,

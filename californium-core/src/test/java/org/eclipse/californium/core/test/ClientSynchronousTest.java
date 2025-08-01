@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.californium.TestTools;
 import org.eclipse.californium.core.CoapClient;
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapObserveRelation;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.CoapResponse;
@@ -43,8 +44,7 @@ import org.eclipse.californium.core.coap.MediaTypeRegistry;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.network.CoapEndpoint;
 import org.eclipse.californium.core.network.Endpoint;
-import org.eclipse.californium.core.network.interceptors.MessageInterceptorAdapter;
-import org.eclipse.californium.core.server.resources.CoapExchange;
+import org.eclipse.californium.core.network.interceptors.MessageInterceptor;
 import org.eclipse.californium.elements.EndpointContext;
 import org.eclipse.californium.elements.UdpEndpointContextMatcher;
 import org.eclipse.californium.elements.category.Medium;
@@ -181,7 +181,7 @@ public class ClientSynchronousTest {
 		builder.setInetSocketAddress(TestTools.LOCALHOST_EPHEMERAL);
 		CoapEndpoint clientEndpoint = builder.build();
 		cleanup.add(clientEndpoint);
-		clientEndpoint.addInterceptor(new MessageInterceptorAdapter() {
+		clientEndpoint.addInterceptor(new MessageInterceptor() {
 
 			@Override
 			public void sendRequest(Request request) {
@@ -219,7 +219,7 @@ public class ClientSynchronousTest {
 		builder.setInetSocketAddress(TestTools.LOCALHOST_EPHEMERAL);
 		CoapEndpoint clientEndpoint = builder.build();
 		cleanup.add(clientEndpoint);
-		clientEndpoint.addInterceptor(new MessageInterceptorAdapter() {
+		clientEndpoint.addInterceptor(new MessageInterceptor() {
 
 			@Override
 			public void sendRequest(Request request) {

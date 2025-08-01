@@ -29,16 +29,15 @@ package org.eclipse.californium.core.observe;
 import java.net.InetSocketAddress;
 import java.util.concurrent.TimeUnit;
 
-import org.eclipse.californium.core.coap.Request;
-import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.coap.CoAP.Type;
 import org.eclipse.californium.core.coap.OptionSet;
+import org.eclipse.californium.core.coap.Request;
+import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.config.CoapConfig;
 import org.eclipse.californium.core.network.Endpoint;
 import org.eclipse.californium.core.network.Exchange;
 import org.eclipse.californium.core.network.KeyToken;
 import org.eclipse.californium.core.server.resources.ObservableResource;
-import org.eclipse.californium.core.server.resources.Resource;
 import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.util.ClockUtil;
 import org.slf4j.Logger;
@@ -112,10 +111,6 @@ public class ObserveRelation {
 	/**
 	 * Observe manager.
 	 * 
-	 * If used with deprecated
-	 * {@link #ObserveRelation(ObservingEndpoint, Resource, Exchange)}, the
-	 * manager is {@code null}.
-	 * 
 	 * @since 3.6
 	 */
 	private final ObserveManager manager;
@@ -161,24 +156,6 @@ public class ObserveRelation {
 
 	private long interestCheckTimer = ClockUtil.nanoRealtime();
 	private int interestCheckCounter = 1;
-
-	/**
-	 * Constructs a new observe relation.
-	 * 
-	 * @param endpoint the observing endpoint
-	 * @param resource the observed resource
-	 * @param exchange the exchange that tries to establish the observe relation
-	 * @throws ClassCastException if {@link Resource} does not implement
-	 *             {@link ObservableResource} as well
-	 * @deprecated use
-	 *             {@link #ObserveRelation(ObserveManager, ObservableResource, Exchange)}
-	 *             instead.
-	 */
-	@Deprecated
-	public ObserveRelation(ObservingEndpoint endpoint, Resource resource, Exchange exchange) {
-		this(null, (ObservableResource) resource, exchange);
-		setEndpoint(endpoint);
-	}
 
 	/**
 	 * Constructs a new observe relation.
@@ -258,7 +235,7 @@ public class ObserveRelation {
 		}
 		if (fail) {
 			throw new IllegalStateException(
-					String.format("Could not establish observe relation %s with %s, already canceled (%s)!", getKey(),
+					String.format("Could not establish observe relation %s with %s, already canceled (%s)!", getKeyToken(),
 							resource.getURI(), exchange));
 		}
 	}
@@ -270,19 +247,6 @@ public class ObserveRelation {
 	 */
 	public boolean isCanceled() {
 		return canceled;
-	}
-
-	/**
-	 * Cleanup relation.
-	 * 
-	 * {@link #cancel()}, if {@link #isEstablished()}.
-	 * 
-	 * @since 3.0
-	 * @deprecated use {@link #cancel()} also for not established relations
-	 */
-	@Deprecated
-	public void cleanup() {
-		cancel();
 	}
 
 	public void reject() {
@@ -315,38 +279,6 @@ public class ObserveRelation {
 	 */
 	public void cancelAll() {
 		remoteEndpoint.cancelAll();
-	}
-
-	/**
-	 * Notifies the observing endpoint that the resource has been changed. This
-	 * method makes the resource process the same request again.
-	 * 
-	 * Note: the {@link ObservableResource} must implement {@link Resource} as
-	 * well in order to call this method
-	 * 
-	 * @throws ClassCastException if {@link ObservableResource} does not
-	 *             implement {@link Resource} as well
-	 * @deprecated obsolete
-	 */
-	@Deprecated
-	public void notifyObservers() {
-		((Resource) resource).handleRequest(exchange);
-	}
-
-	/**
-	 * Gets the resource.
-	 *
-	 * Note: the {@link ObservableResource} must implement {@link Resource} as
-	 * well in order to call this method
-	 * 
-	 * @return the resource
-	 * @throws ClassCastException if {@link ObservableResource} does not
-	 *             implement {@link Resource} as well
-	 * @deprecated obsolete
-	 */
-	@Deprecated
-	public Resource getResource() {
-		return (Resource) resource;
 	}
 
 	/**
@@ -530,6 +462,10 @@ public class ObserveRelation {
 	public Response getNextNotification(Response response, boolean acknowledged) {
 		Response next = null;
 		if (recentControlNotification == response) {
+			if (acknowledged) {
+				// reset transmission
+				exchange.resetRelationTransmission(this);
+			}
 			next = nextControlNotification;
 			if (next != null) {
 				// next may be null
@@ -543,21 +479,6 @@ public class ObserveRelation {
 			}
 		}
 		return next;
-	}
-
-	/**
-	 * Send response for this relation.
-	 * 
-	 * If the response is no notification, {@link #cancel()} the relation
-	 * internally without completing the exchange.
-	 * 
-	 * @param response response to sent.
-	 * @since 3.0
-	 * @deprecated use {@link #onSend(Response)} instead
-	 */
-	@Deprecated
-	public void send(Response response) {
-		onSend(response);
 	}
 
 	/**
@@ -588,19 +509,6 @@ public class ObserveRelation {
 	}
 
 	/**
-	 * Get key, identifying this observer relation.
-	 * 
-	 * Combination of source-address and token.
-	 * 
-	 * @return identifying key
-	 * @deprecated use {@link #getKeyToken()} instead
-	 */
-	@Deprecated
-	public String getKey() {
-		return this.key.toString();
-	}
-
-	/**
 	 * Cancel this observe relation.
 	 * 
 	 * This methods invokes the cancel methods of the resource and the endpoint.
@@ -626,7 +534,7 @@ public class ObserveRelation {
 			}
 		}
 		if (cancel) {
-			LOGGER.debug("Canceling observe relation {} with {} ({})", getKey(), resource.getURI(), exchange);
+			LOGGER.debug("Canceling observe relation {} with {} ({})", getKeyToken(), resource.getURI(), exchange);
 			if (established) {
 				resource.removeObserveRelation(this);
 			}
@@ -665,7 +573,7 @@ public class ObserveRelation {
 		}
 		boolean noNotification = result == State.NONE || result == State.CANCELED;
 		if (response.isNotification() && (!response.isSuccess() || noNotification)) {
-			LOGGER.warn("Application notification, not longer observing, remove observe-option {}", response);
+			LOGGER.info("Application notification, not longer observing, remove observe-option {}", response);
 			response.getOptions().removeObserve();
 		}
 		return result;

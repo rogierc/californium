@@ -30,10 +30,6 @@ import static org.eclipse.californium.core.coap.CoAP.MessageFormat.PAYLOAD_MARKE
 
 import org.eclipse.californium.core.coap.CoAP;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
-import org.eclipse.californium.core.coap.option.LegacyMapBasedOptionRegistry;
-import org.eclipse.californium.core.coap.option.OptionDefinition;
-import org.eclipse.californium.core.coap.option.OptionRegistry;
-import org.eclipse.californium.core.coap.option.StandardOptionRegistry;
 import org.eclipse.californium.core.coap.CoAPMessageFormatException;
 import org.eclipse.californium.core.coap.CoAPOptionException;
 import org.eclipse.californium.core.coap.EmptyMessage;
@@ -44,6 +40,9 @@ import org.eclipse.californium.core.coap.OptionNumberRegistry;
 import org.eclipse.californium.core.coap.OptionSet;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
+import org.eclipse.californium.core.coap.option.OptionDefinition;
+import org.eclipse.californium.core.coap.option.OptionRegistry;
+import org.eclipse.californium.core.coap.option.StandardOptionRegistry;
 import org.eclipse.californium.elements.RawData;
 import org.eclipse.californium.elements.util.Bytes;
 import org.eclipse.californium.elements.util.DatagramReader;
@@ -51,7 +50,6 @@ import org.eclipse.californium.elements.util.DatagramReader;
 /**
  * A base class for parsing CoAP messages from a byte array.
  */
-@SuppressWarnings("deprecation")
 public abstract class DataParser {
 
 	protected final OptionRegistry optionRegistry;
@@ -64,28 +62,6 @@ public abstract class DataParser {
 	 */
 	protected DataParser() {
 		optionRegistry = StandardOptionRegistry.getDefaultOptionRegistry();
-	}
-
-	/**
-	 * Create data parser with support for critical custom options.
-	 * 
-	 * @param criticalCustomOptions Array of critical custom options. Empty to
-	 *            fail on custom critical options. {@code null} to use
-	 *            {@link OptionNumberRegistry#getCriticalCustomOptions()} as
-	 *            default to check for critical custom options.
-	 * @see OptionNumberRegistry#getCriticalCustomOptions()
-	 * @since 3.8 Use {@link StandardOptionRegistry#getDefaultOptionRegistry()}
-	 *        as default option registry.
-	 * @deprecated please use {@link OptionRegistry} with
-	 *             {@link #DataParser(OptionRegistry)}.
-	 */
-	@Deprecated
-	protected DataParser(int[] criticalCustomOptions) {
-		if (criticalCustomOptions == null) {
-			criticalCustomOptions = OptionNumberRegistry.getCriticalCustomOptions();
-		}
-		this.optionRegistry = new LegacyMapBasedOptionRegistry(true, criticalCustomOptions,
-				StandardOptionRegistry.getDefaultOptionRegistry());
 	}
 
 	/**
@@ -141,11 +117,13 @@ public abstract class DataParser {
 	public final Message parseMessage(final byte[] msg) {
 
 		String errorMsg = "illegal message code";
+		ResponseCode errorCode = null;
 		DatagramReader reader = new DatagramReader(msg);
 		MessageHeader header = parseHeader(reader);
 		try {
 			Message message = null;
 			if (CoAP.isRequest(header.getCode())) {
+				errorCode = ResponseCode.METHOD_NOT_ALLOWED;
 				message = parseMessage(reader, header, new Request(CoAP.Code.valueOf(header.getCode())));
 			} else if (CoAP.isResponse(header.getCode())) {
 				message = parseMessage(reader, header, new Response(CoAP.ResponseCode.valueOf(header.getCode())));
@@ -165,7 +143,7 @@ public abstract class DataParser {
 			errorMsg = e.getMessage();
 		}
 		throw new CoAPMessageFormatException(errorMsg, header.getToken(), header.getMID(), header.getCode(),
-				CoAP.Type.CON == header.getType());
+				CoAP.Type.CON == header.getType(), errorCode);
 	}
 
 	/**
@@ -202,27 +180,18 @@ public abstract class DataParser {
 	/**
 	 * Assert, if options are supported for the specific protocol flavor.
 	 * 
-	 * @param options option set to validate.
+	 * @param message message of option set to validate.
 	 * @throws IllegalArgumentException if at least one option is not valid for
 	 *             the specific flavor.
-	 * @since 3.0
+	 * @since 4.0 (changed parameter to Message)
 	 */
-	protected void assertValidOptions(OptionSet options) {
-		// empty default implementation
-	}
-
-	/**
-	 * Check, if option number is a (supported) critical custom option.
-	 * 
-	 * @param optionNumber option number to check
-	 * @return {@code true}, if option number is a critical custom option,
-	 *         {@code false}, if not.
-	 * @since 3.4
-	 * @deprecated
-	 */
-	@Deprecated
-	protected boolean isCiriticalCustomOption(int optionNumber) {
-		return false;
+	protected void assertValidOptions(Message message) {
+		if (CoAP.isResponse(message.getRawCode())) {
+			int count = message.getOptions().getETagCount();
+			if (count > 1) {
+				throw new IllegalArgumentException("Multiple ETAGs (" + count + ") in response!");
+			}
+		}
 	}
 
 	/**
@@ -264,8 +233,7 @@ public abstract class DataParser {
 
 				// read option
 				if (reader.bytesAvailable(optionLength)) {
-					byte[] value = reader.readBytes(optionLength);
-					Option option = createOption(code, currentOptionNumber, value);
+					Option option = createOption(code, currentOptionNumber, reader, optionLength);
 					if (option != null) {
 						optionSet.addOption(option);
 					}
@@ -284,7 +252,7 @@ public abstract class DataParser {
 			}
 		}
 		try {
-			assertValidOptions(message.getOptions());
+			assertValidOptions(message);
 		} catch (IllegalArgumentException ex) {
 			throw new CoAPMessageFormatException(ex.getMessage(), message.getToken(), message.getMID(),
 					message.getRawCode(), message.isConfirmable(), ResponseCode.BAD_REQUEST);
@@ -309,18 +277,19 @@ public abstract class DataParser {
 	}
 
 	/**
-	 * Create option.
-	 * 
+	 * Creates option.
+	 * <p>
 	 * Enables custom implementation to override this method in order to ignore,
 	 * fix malformed options, or provide details for an custom error response.
-	 * 
-	 * Note: only malformed CON-requests are responded with an error message.
-	 * Malformed CON-responses are always rejected and malformed NON-messages
-	 * are always ignored.
+	 * <p>
+	 * <b>Note:</b> only malformed CON-requests are responded with an error
+	 * message. Malformed CON-responses are always rejected and malformed
+	 * NON-messages are always ignored.
 	 * 
 	 * @param code message code
 	 * @param optionNumber option number
-	 * @param value option value
+	 * @param reader datagram reader to read the option value
+	 * @param length length of the option value
 	 * @return create option, or {@code null}, to ignore this option. Please
 	 *         take care, if you ignore malformed critical options, the outcome
 	 *         will be undefined!
@@ -331,12 +300,12 @@ public abstract class DataParser {
 	 * @throws NullPointerException if provided value is {@code null}
 	 * @see Message#getRawCode()
 	 * @see Option#getNumber()
-	 * @since 3.8 (add parameter code)
+	 * @since 4.0 (changed parameter {@code byte[] value} to DatagramReader and length)
 	 */
-	public Option createOption(int code, int optionNumber, byte[] value) {
+	public Option createOption(int code, int optionNumber, DatagramReader reader, int length) {
 		OptionDefinition definition = optionRegistry.getDefinitionByNumber(code, optionNumber);
 		if (definition != null) {
-			return definition.create(value);
+			return definition.create(reader, length);
 		} else if (OptionNumberRegistry.isCritical(optionNumber)) {
 			throw new IllegalArgumentException("Unknown critical option " + optionNumber + " is not supported!");
 		} else {

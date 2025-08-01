@@ -15,13 +15,9 @@
 package org.eclipse.californium.cloud;
 
 import java.io.File;
-import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
-import java.security.GeneralSecurityException;
-import java.security.PrivateKey;
-import java.security.PublicKey;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -33,25 +29,29 @@ import java.util.concurrent.TimeUnit;
 import org.eclipse.californium.cloud.http.HttpService;
 import org.eclipse.californium.cloud.http.HttpService.CoapProxyHandler;
 import org.eclipse.californium.cloud.http.HttpService.ForwardHandler;
+import org.eclipse.californium.cloud.http.HttpService.WebAnonymous;
 import org.eclipse.californium.cloud.resources.Devices;
 import org.eclipse.californium.cloud.resources.Diagnose;
 import org.eclipse.californium.cloud.resources.MyContext;
 import org.eclipse.californium.cloud.resources.Provisioning;
+import org.eclipse.californium.cloud.util.CredentialsStore;
 import org.eclipse.californium.cloud.util.DeviceGredentialsProvider;
 import org.eclipse.californium.cloud.util.DeviceManager;
 import org.eclipse.californium.cloud.util.DeviceParser;
 import org.eclipse.californium.cloud.util.DeviceProvisioningConsumer;
 import org.eclipse.californium.cloud.util.ResourceStore;
 import org.eclipse.californium.core.CoapServer;
+import org.eclipse.californium.core.coap.CoAP;
 import org.eclipse.californium.core.config.CoapConfig;
 import org.eclipse.californium.core.config.CoapConfig.MatcherMode;
 import org.eclipse.californium.core.network.CoapEndpoint;
 import org.eclipse.californium.core.network.Endpoint;
+import org.eclipse.californium.core.network.EndpointContextMatcherFactory;
 import org.eclipse.californium.core.network.interceptors.HealthStatisticLogger;
 import org.eclipse.californium.core.observe.ObserveStatisticLogger;
 import org.eclipse.californium.core.server.resources.Resource;
 import org.eclipse.californium.elements.EndpointContextMatcher;
-import org.eclipse.californium.elements.PrincipalEndpointContextMatcher;
+import org.eclipse.californium.elements.config.CertificateAuthenticationMode;
 import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.config.Configuration.DefinitionsProvider;
 import org.eclipse.californium.elements.config.IntegerDefinition;
@@ -66,7 +66,7 @@ import org.eclipse.californium.elements.util.NamedThreadFactory;
 import org.eclipse.californium.elements.util.NetworkInterfacesUtil;
 import org.eclipse.californium.elements.util.NetworkInterfacesUtil.InetAddressFilter;
 import org.eclipse.californium.elements.util.NetworkInterfacesUtil.SimpleInetAddressFilter;
-import org.eclipse.californium.elements.util.SslContextUtil;
+import org.eclipse.californium.elements.util.ProtocolScheduledExecutorService;
 import org.eclipse.californium.elements.util.SslContextUtil.Credentials;
 import org.eclipse.californium.elements.util.StringUtil;
 import org.eclipse.californium.elements.util.SystemResourceMonitors;
@@ -79,9 +79,9 @@ import org.eclipse.californium.scandium.config.DtlsConfig;
 import org.eclipse.californium.scandium.config.DtlsConfig.DtlsRole;
 import org.eclipse.californium.scandium.config.DtlsConnectorConfig;
 import org.eclipse.californium.scandium.dtls.cipher.CipherSuite;
-import org.eclipse.californium.scandium.dtls.pskstore.AdvancedPskStore;
+import org.eclipse.californium.scandium.dtls.pskstore.PskStore;
 import org.eclipse.californium.scandium.dtls.x509.CertificateProvider;
-import org.eclipse.californium.scandium.dtls.x509.NewAdvancedCertificateVerifier;
+import org.eclipse.californium.scandium.dtls.x509.CertificateVerifier;
 import org.eclipse.californium.unixhealth.NetSocketHealthLogger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -94,7 +94,7 @@ import picocli.CommandLine.ParseResult;
 
 /**
  * The basic cloud server.
- * 
+ * <p>
  * Creates {@link Endpoint}s using DTLS. Adds resources {@link Diagnose} and
  * {@link MyContext}.
  * 
@@ -124,6 +124,10 @@ public class BaseServer extends CoapServer {
 	 * Name of public key file for DTLS 1.2 (device communication).
 	 */
 	public static final String DTLS_PUBLIC_KEY = "pubkey.pem";
+	/**
+	 * Name of certificate file for DTLS 1.2 (device communication).
+	 */
+	public static final String DTLS_FULLCHAIN = "fullchain.pem";
 
 	// exit codes for runtime errors
 	public static final int ERR_INIT_FAILED = 1;
@@ -168,47 +172,52 @@ public class BaseServer extends CoapServer {
 	public static final TimeDefinition DEVICE_CREDENTIALS_RELOAD_INTERVAL = new TimeDefinition(
 			"DEVICE_CREDENTIALS_RELOAD_INTERVAL",
 			"Reload device credentials interval. 0 to load credentials only on startup.", 60, TimeUnit.SECONDS);
+	/**
+	 * Request timeout for adding device credentials in auto-provisioning.
+	 * 
+	 * @since 4.0
+	 */
+	public static final TimeDefinition DEVICE_CREDENTIALS_ADD_TIMEOUT = new TimeDefinition(
+			"DEVICE_CREDENTIALS_ADD_TIMEOUT",
+			"Request timeout for adding device credentials in auto-provisioning. Credentials must be added in series and concurrent requests may cause overload resulting in timeouts.",
+			5000, TimeUnit.MILLISECONDS);
 
 	/**
 	 * Default configuration setup.
 	 * 
 	 * @see Configuration#createWithFile(File, String, DefinitionsProvider)
 	 */
-	public static DefinitionsProvider DEFAULTS = new DefinitionsProvider() {
-
-		@Override
-		public void applyDefinitions(Configuration config) {
-			int processors = Runtime.getRuntime().availableProcessors();
-			config.set(SystemConfig.HEALTH_STATUS_INTERVAL, 300, TimeUnit.SECONDS);
-			config.set(CoapConfig.MAX_RESOURCE_BODY_SIZE, DEFAULT_MAX_RESOURCE_SIZE);
-			config.set(CoapConfig.MAX_MESSAGE_SIZE, DEFAULT_MAX_MESSAGE_SIZE);
-			config.set(CoapConfig.PREFERRED_BLOCK_SIZE, DEFAULT_BLOCK_SIZE);
-			config.set(CoapConfig.NOTIFICATION_CHECK_INTERVAL_COUNT, 4);
-			config.set(CoapConfig.NOTIFICATION_CHECK_INTERVAL_TIME, 30, TimeUnit.SECONDS);
-			config.set(CoapConfig.MAX_ACTIVE_PEERS, DEFAULT_MAX_CONNECTIONS);
-			config.set(CoapConfig.PEERS_MARK_AND_SWEEP_MESSAGES, 16);
-			config.set(CoapConfig.DEDUPLICATOR, CoapConfig.DEDUPLICATOR_PEERS_MARK_AND_SWEEP);
-			config.set(CoapConfig.RESPONSE_MATCHING, MatcherMode.PRINCIPAL_IDENTITY);
-			config.set(CoapConfig.ACK_TIMEOUT, 2500, TimeUnit.MILLISECONDS);
-			config.set(DtlsConfig.DTLS_ROLE, DtlsRole.SERVER_ONLY);
-			config.set(DtlsConfig.DTLS_RETRANSMISSION_TIMEOUT, 2500, TimeUnit.MILLISECONDS);
-			config.set(DtlsConfig.DTLS_ADDITIONAL_ECC_TIMEOUT, 8, TimeUnit.SECONDS);
-			config.set(DtlsConfig.DTLS_AUTO_HANDSHAKE_TIMEOUT, null, TimeUnit.SECONDS);
-			config.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, 6);
-			config.set(DtlsConfig.DTLS_PRESELECTED_CIPHER_SUITES, PRESELECTED_CIPHER_SUITES);
-			config.set(DtlsConfig.DTLS_MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
-			config.set(DtlsConfig.DTLS_REMOVE_STALE_DOUBLE_PRINCIPALS, true);
-			config.set(DtlsConfig.DTLS_SERVER_USE_SESSION_ID, false);
-			config.set(DtlsConfig.DTLS_RECEIVE_BUFFER_SIZE, 1000000);
-			config.set(DtlsConfig.DTLS_RECEIVER_THREAD_COUNT, processors > 3 ? 2 : 1);
-			config.set(DtlsConfig.DTLS_MAC_ERROR_FILTER_QUIET_TIME, 4, TimeUnit.SECONDS);
-			config.set(DtlsConfig.DTLS_MAC_ERROR_FILTER_THRESHOLD, 8);
-			config.set(UDP_DROPS_READ_INTERVAL, 2000, TimeUnit.MILLISECONDS);
-			config.set(CACHE_MAX_DEVICES, 5000);
-			config.set(CACHE_STALE_DEVICE_THRESHOLD, 24, TimeUnit.HOURS);
-			config.set(HTTPS_CREDENTIALS_RELOAD_INTERVAL, 30, TimeUnit.MINUTES);
-			config.set(DEVICE_CREDENTIALS_RELOAD_INTERVAL, 30, TimeUnit.SECONDS);
-		}
+	public static DefinitionsProvider DEFAULTS = (config) -> {
+		int processors = Runtime.getRuntime().availableProcessors();
+		config.set(SystemConfig.HEALTH_STATUS_INTERVAL, 300, TimeUnit.SECONDS);
+		config.set(CoapConfig.MAX_RESOURCE_BODY_SIZE, DEFAULT_MAX_RESOURCE_SIZE);
+		config.set(CoapConfig.MAX_MESSAGE_SIZE, DEFAULT_MAX_MESSAGE_SIZE);
+		config.set(CoapConfig.PREFERRED_BLOCK_SIZE, DEFAULT_BLOCK_SIZE);
+		config.set(CoapConfig.NOTIFICATION_CHECK_INTERVAL_COUNT, 4);
+		config.set(CoapConfig.NOTIFICATION_CHECK_INTERVAL_TIME, 30, TimeUnit.SECONDS);
+		config.set(CoapConfig.MAX_ACTIVE_PEERS, DEFAULT_MAX_CONNECTIONS);
+		config.set(CoapConfig.PEERS_MARK_AND_SWEEP_MESSAGES, 16);
+		config.set(CoapConfig.DEDUPLICATOR, CoapConfig.DEDUPLICATOR_PEERS_MARK_AND_SWEEP);
+		config.set(CoapConfig.RESPONSE_MATCHING, MatcherMode.PRINCIPAL_IDENTITY);
+		config.set(CoapConfig.ACK_TIMEOUT, 2500, TimeUnit.MILLISECONDS);
+		config.set(DtlsConfig.DTLS_ROLE, DtlsRole.SERVER_ONLY);
+		config.set(DtlsConfig.DTLS_RETRANSMISSION_TIMEOUT, 2500, TimeUnit.MILLISECONDS);
+		config.set(DtlsConfig.DTLS_ADDITIONAL_ECC_TIMEOUT, 8, TimeUnit.SECONDS);
+		config.set(DtlsConfig.DTLS_AUTO_HANDSHAKE_TIMEOUT, null, TimeUnit.SECONDS);
+		config.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, 6);
+		config.set(DtlsConfig.DTLS_PRESELECTED_CIPHER_SUITES, PRESELECTED_CIPHER_SUITES);
+		config.set(DtlsConfig.DTLS_MAX_CONNECTIONS, DEFAULT_MAX_CONNECTIONS);
+		config.set(DtlsConfig.DTLS_REMOVE_STALE_DOUBLE_PRINCIPALS, true);
+		config.set(DtlsConfig.DTLS_SERVER_USE_SESSION_ID, false);
+		config.set(DtlsConfig.DTLS_RECEIVE_BUFFER_SIZE, 1000000);
+		config.set(DtlsConfig.DTLS_RECEIVER_THREAD_COUNT, processors > 3 ? 2 : 1);
+		config.set(DtlsConfig.DTLS_MAC_ERROR_FILTER_QUIET_TIME, 4, TimeUnit.SECONDS);
+		config.set(DtlsConfig.DTLS_MAC_ERROR_FILTER_THRESHOLD, 8);
+		config.set(UDP_DROPS_READ_INTERVAL, 2000, TimeUnit.MILLISECONDS);
+		config.set(CACHE_MAX_DEVICES, 5000);
+		config.set(CACHE_STALE_DEVICE_THRESHOLD, 24, TimeUnit.HOURS);
+		config.set(HTTPS_CREDENTIALS_RELOAD_INTERVAL, 30, TimeUnit.MINUTES);
+		config.set(DEVICE_CREDENTIALS_RELOAD_INTERVAL, 30, TimeUnit.SECONDS);
 	};
 
 	public static class ServerConfig {
@@ -221,7 +230,7 @@ public class BaseServer extends CoapServer {
 
 		public static class NetworkConfig {
 
-			@Option(names = "--wildcard-interface", description = "Use local wildcard-address for coap endpoints.")
+			@Option(names = "--wildcard-interface", description = "Use local wildcard-address for coap endpoints. Default mode.")
 			public boolean wildcard;
 
 			@ArgGroup(exclusive = false)
@@ -257,21 +266,6 @@ public class BaseServer extends CoapServer {
 		}
 
 		@ArgGroup(exclusive = false)
-		public HttpsConfig https;
-
-		public static class HttpsConfig {
-
-			@Option(names = "--https-port", required = true, description = "Port of https service.")
-			public int port;
-
-			@Option(names = "--https-credentials", required = true, description = "Folder containing https credentials in 'privkey.pem' and 'fullchain.pem'.")
-			public String credentials;
-
-			@Option(names = "--https-password64", description = "Folder containing https credentials in 'privkey.pem' and 'fullchain.pem'.")
-			public String password64;
-		}
-
-		@ArgGroup(exclusive = false)
 		public CoapsConfig coaps;
 
 		public static class CoapsConfig {
@@ -279,7 +273,7 @@ public class BaseServer extends CoapServer {
 			@Option(names = "--coaps-credentials", required = true, description = "Folder containing coaps credentials in 'privkey.pem' and 'pubkey.pem'")
 			public String credentials;
 
-			@Option(names = "--coaps-password64", required = false, description = "Password for device store. Base 64 encoded.")
+			@Option(names = "--coaps-password64", required = false, description = "Password for coaps credentials. Base 64 encoded.")
 			public String password64;
 
 		}
@@ -330,6 +324,20 @@ public class BaseServer extends CoapServer {
 
 		public boolean noCoap;
 
+		public HttpsConfig https;
+
+		public static class HttpsConfig {
+
+			@Option(names = "--https-port", defaultValue = "8080", description = "Port of https service. Default: ${DEFAULT-VALUE}")
+			public int port;
+
+			@Option(names = "--https-credentials", required = true, description = "Folder containing https credentials in 'privkey.pem' and 'fullchain.pem'.")
+			public String credentials;
+
+			@Option(names = "--https-password64", description = "Password for https credentials. Base 64 encoded.")
+			public String password64;
+		}
+
 		/**
 		 * Setup dependent defaults.
 		 */
@@ -354,11 +362,6 @@ public class BaseServer extends CoapServer {
 			version = "";
 		}
 		CALIFORNIUM_BUILD_VERSION = version;
-	}
-
-	private static String toLog(PublicKey key) {
-		byte[] data = key.getEncoded();
-		return StringUtil.byteArray2Hex(Arrays.copyOfRange(data, data.length - 6, data.length));
 	}
 
 	public static void start(String[] args, String name, ServerConfig cliArguments, BaseServer server) {
@@ -510,6 +513,8 @@ public class BaseServer extends CoapServer {
 
 	protected DeviceGredentialsProvider deviceCredentials;
 
+	protected List<CounterStatisticManager> diagnoseStatistics = new ArrayList<>();
+
 	public BaseServer(Configuration config) {
 		super(config);
 		setVersion(CALIFORNIUM_BUILD_VERSION);
@@ -521,7 +526,9 @@ public class BaseServer extends CoapServer {
 		if (!getEndpoints().isEmpty()) {
 			super.start();
 		}
-		monitors.start();
+		if (monitors != null) {
+			monitors.start();
+		}
 	}
 
 	@Override
@@ -529,7 +536,9 @@ public class BaseServer extends CoapServer {
 		if (!getEndpoints().isEmpty()) {
 			super.stop();
 		}
-		monitors.stop();
+		if (monitors != null) {
+			monitors.stop();
+		}
 	}
 
 	/**
@@ -541,101 +550,89 @@ public class BaseServer extends CoapServer {
 	public void initialize(ServerConfig cliArguments) throws SocketException {
 		Configuration config = getConfig();
 		// executors
-		ScheduledExecutorService secondaryExecutor = ExecutorsUtil
-				.newDefaultSecondaryScheduler("CoapServer(secondary)#");
+		ProtocolScheduledExecutorService executor = ExecutorsUtil.newProtocolScheduledThreadPool(//
+				config.get(CoapConfig.PROTOCOL_STAGE_THREAD_COUNT), //
+				new NamedThreadFactory("CoapServer#")); //$NON-NLS-1$
 
-		monitors = new SystemResourceMonitors(secondaryExecutor);
+		monitors = new SystemResourceMonitors(executor.getBackgroundExecutor());
 
 		setupDeviceCredentials(cliArguments);
 
 		if (!cliArguments.noCoap) {
 			addEndpoints(cliArguments);
 
-			ScheduledExecutorService executor = ExecutorsUtil.newScheduledThreadPool(//
-					config.get(CoapConfig.PROTOCOL_STAGE_THREAD_COUNT), //
-					new NamedThreadFactory("CoapServer(main)#")); //$NON-NLS-1$
 			addResource(cliArguments, executor);
 
-			setExecutors(executor, secondaryExecutor, false);
+			setExecutor(executor, false);
 
 			// additional health loggers
-			setupUdpHealthLogger(secondaryExecutor);
+			setupUdpHealthLogger(executor.getBackgroundExecutor());
 			setupObserveHealthLogger();
 		}
 		setupHttpService(cliArguments);
+		setupProcessors(executor.getBackgroundExecutor());
 
 		LOGGER.info("{} initialized.", getTag());
 	}
 
 	/**
 	 * Setup device credentials.
-	 * 
+	 * <p>
 	 * Load the private and public key of the DTLS 1.2 server for the device
 	 * communication and the device credentials.
 	 * 
 	 * @param cliArguments command line arguments.
 	 */
 	public void setupDeviceCredentials(ServerConfig cliArguments) {
-		PrivateKey privateKey = null;
-		PublicKey publicKey = null;
+		Credentials credentials = null;
 		if (cliArguments.coaps != null) {
-			try {
-				String path = cliArguments.coaps.credentials;
-				if (!path.endsWith("/")) {
-					path += "/";
-				}
-				String privateKeyPath = path + DTLS_PRIVATE_KEY;
-				Credentials credentials = SslContextUtil.loadCredentials(privateKeyPath, null, null, null);
-				privateKey = credentials.getPrivateKey();
-				publicKey = credentials.getPublicKey();
-				if (privateKey == null) {
-					LOGGER.info("PEM credentials {}, missing private key!", privateKeyPath);
-				} else if (publicKey != null) {
-					LOGGER.info("PEM credentials {}, public key: ...{}", privateKeyPath, toLog(publicKey));
-				} else {
-					String publicKeyPath = path + DTLS_PUBLIC_KEY;
-					credentials = SslContextUtil.loadCredentials(publicKeyPath, null, null, null);
-					publicKey = credentials.getPublicKey();
-					if (publicKey != null) {
-						LOGGER.info("PEM credentials {}, public key: ...{}", publicKeyPath, toLog(publicKey));
-					} else {
-						LOGGER.info("PEM credentials {}, missing public key!", publicKeyPath);
-					}
-				}
-			} catch (IOException e) {
-				LOGGER.info("Loading PEM credentials failed", e);
-			} catch (GeneralSecurityException e) {
-				LOGGER.info("Loading PEM credentials failed", e);
+			String path = cliArguments.coaps.credentials;
+			if (path.endsWith("/")) {
+				path = path.substring(0, path.length() - 1);
+			}
+			File directory = new File(path);
+			if (!directory.exists()) {
+				LOGGER.error("Missing directory {} for coap credentials!", path);
+			} else {
+				CredentialsStore store = new CredentialsStore();
+				store.setTag("coaps ");
+				String privateKeyPath = path + "/" + DTLS_PRIVATE_KEY;
+				String publicKeyPath = path + "/" + DTLS_PUBLIC_KEY;
+				String fullChainPath = path + "/" + DTLS_FULLCHAIN;
+				credentials = store.loadAndCreateMonitor(cliArguments.coaps.password64, false, fullChainPath,
+						privateKeyPath, publicKeyPath);
 			}
 		}
-		setupDeviceCredentials(cliArguments, privateKey, publicKey);
+		setupDeviceCredentials(cliArguments, credentials);
 	}
 
 	/**
 	 * Setup device credentials.
-	 * 
+	 * <p>
 	 * Load the device credentials.
 	 * 
 	 * @param cliArguments command line arguments.
-	 * @param privateKey private key for DTLS 1.2 device communication.
-	 * @param publicKey public key for DTLS 1.2 device communication.
+	 * @param credentials server's credentials for DTLS 1.2 certificate based
+	 *            authentication
+	 * @since 4.0
 	 */
-	public void setupDeviceCredentials(ServerConfig cliArguments, PrivateKey privateKey, PublicKey publicKey) {
+	public void setupDeviceCredentials(ServerConfig cliArguments, Credentials credentials) {
+		ResourceStore<DeviceParser> deviceCredentialsResource = null;
 		if (cliArguments.deviceStore != null) {
 			long interval = getConfig().get(DEVICE_CREDENTIALS_RELOAD_INTERVAL, TimeUnit.SECONDS);
 			boolean replace = cliArguments.provisioning != null ? cliArguments.provisioning.replace : false;
 			if (replace) {
-				LOGGER.info("New device credentials will replace already available ones. Use this only for development!");
+				LOGGER.info(
+						"New device credentials will replace already available ones. Use this only for development!");
 			}
-			DeviceParser factory = new DeviceParser(true, replace);
-			ResourceStore<DeviceParser> deviceCredentialsResource = new ResourceStore<>(factory).setTag("Devices ");
+			DeviceParser factory = new DeviceParser(true, replace, null);
+			deviceCredentialsResource = new ResourceStore<>(factory).setTag("Devices ");
 			deviceCredentialsResource.loadAndCreateMonitor(cliArguments.deviceStore.file,
 					cliArguments.deviceStore.password64, interval > 0);
 			monitors.addMonitor("Devices", interval, TimeUnit.SECONDS, deviceCredentialsResource.getMonitor());
-			deviceCredentials = new DeviceManager(deviceCredentialsResource, privateKey, publicKey);
-		} else {
-			deviceCredentials = new DeviceManager(null, privateKey, publicKey);
 		}
+		long addTimeout = getConfig().get(DEVICE_CREDENTIALS_ADD_TIMEOUT, TimeUnit.MILLISECONDS);
+		deviceCredentials = new DeviceManager(deviceCredentialsResource, credentials, addTimeout);
 	}
 
 	/**
@@ -655,15 +652,18 @@ public class BaseServer extends CoapServer {
 		}
 
 		// Context matcher
-		EndpointContextMatcher customContextMatcher = null;
-		if (MatcherMode.PRINCIPAL == config.get(CoapConfig.RESPONSE_MATCHING)) {
-			customContextMatcher = new PrincipalEndpointContextMatcher(true);
-		}
+		boolean applicationAuthentication = config.get(DtlsConfig.DTLS_CLIENT_AUTHENTICATION_MODE) != CertificateAuthenticationMode.NEEDED &&
+				config.get(DtlsConfig.DTLS_APPLICATION_AUTHORIZATION_TIMEOUT, TimeUnit.SECONDS) > 0; 
+
+		EndpointContextMatcher customContextMatcher = EndpointContextMatcherFactory.create(CoAP.PROTOCOL_DTLS,
+				applicationAuthentication, config);
 
 		// explore network interfaces
 		Collection<InetAddress> localAddresses;
+		String serializationLabel = null;
 		if (cliArguments.network.wildcard) {
 			localAddresses = Collections.singleton(new InetSocketAddress(0).getAddress());
+			serializationLabel = "*";
 		} else {
 			localAddresses = NetworkInterfacesUtil
 					.getNetworkInterfaces(cliArguments.network.selectInterfaces.getFilter(getTag()));
@@ -675,17 +675,20 @@ public class BaseServer extends CoapServer {
 			dtlsConfigBuilder.setAddress(bindToAddress);
 			String tag = "dtls:" + StringUtil.toString(bindToAddress);
 			dtlsConfigBuilder.setLoggingTag(tag);
-			AdvancedPskStore pskStore = deviceCredentials.getPskStore();
+			if (serializationLabel != null) {
+				dtlsConfigBuilder.setSerializationLabel(serializationLabel);
+			}
+			PskStore pskStore = deviceCredentials.getPskStore();
 			if (pskStore != null) {
-				dtlsConfigBuilder.setAdvancedPskStore(pskStore);
+				dtlsConfigBuilder.setPskStore(pskStore);
 			}
 			CertificateProvider certificateProvider = deviceCredentials.getCertificateProvider();
 			if (certificateProvider != null) {
 				dtlsConfigBuilder.setCertificateIdentityProvider(certificateProvider);
 			}
-			NewAdvancedCertificateVerifier certificateVerifier = deviceCredentials.getCertificateVerifier();
+			CertificateVerifier certificateVerifier = deviceCredentials.getCertificateVerifier();
 			if (certificateVerifier != null) {
-				dtlsConfigBuilder.setAdvancedCertificateVerifier(certificateVerifier);
+				dtlsConfigBuilder.setCertificateVerifier(certificateVerifier);
 			}
 			ApplicationLevelInfoSupplier infoSupplier = deviceCredentials.getInfoSupplier();
 			if (infoSupplier != null) {
@@ -753,7 +756,8 @@ public class BaseServer extends CoapServer {
 		if (httpService != null) {
 			ForwardHandler forward = new ForwardHandler("devices", "Devices:");
 			httpService.createContext("/", forward);
-			CoapProxyHandler proxy = new CoapProxyHandler(getMessageDeliverer(), httpService.getExecutor());
+			CoapProxyHandler proxy = new CoapProxyHandler(getMessageDeliverer(), WebAnonymous.create(),
+					httpService.getExecutor());
 			httpService.createContext(Devices.RESOURCE_NAME, proxy);
 			if (cliArguments.diagnose) {
 				httpService.createContext(Diagnose.RESOURCE_NAME, proxy);
@@ -763,7 +767,7 @@ public class BaseServer extends CoapServer {
 
 	/**
 	 * Setup UDP health logger.
-	 * 
+	 * <p>
 	 * Generate UDP statistic.
 	 * 
 	 * @param secondaryExecutor secondary executor for slow interval jobs
@@ -789,26 +793,21 @@ public class BaseServer extends CoapServer {
 
 	/**
 	 * Setup observe health logger.
-	 * 
+	 * <p>
 	 * Generate observer-notify statistic.
 	 */
 	public void setupObserveHealthLogger() {
 		ObserveStatisticLogger obsStatLogger = new ObserveStatisticLogger(getTag());
 		if (obsStatLogger.isEnabled()) {
-			add(obsStatLogger);
 			setObserveHealth(obsStatLogger);
-			List<CounterStatisticManager> statistics = new ArrayList<>();
-			statistics.add(obsStatLogger);
-			Resource child = getRoot().getChild(Diagnose.RESOURCE_NAME);
-			if (child instanceof Diagnose) {
-				((Diagnose) child).update(statistics);
-			}
+			add(obsStatLogger);
+			addServerStatistic(obsStatLogger);
 		}
 	}
 
 	/**
 	 * Setup persistence.
-	 * 
+	 * <p>
 	 * Support DTLS 1.2 graceful restart,
 	 * 
 	 * @param store store to keep persisted data
@@ -825,5 +824,30 @@ public class BaseServer extends CoapServer {
 		EncryptedPersistentComponentUtil serialization = new EncryptedPersistentComponentUtil();
 		serialization.addProvider(this);
 		serialization.loadAndRegisterShutdown(store.file, password64, TimeUnit.HOURS.toSeconds(store.maxAge), hook);
+	}
+
+	/**
+	 * Setup processors.
+	 * 
+	 * @param secondaryExecutor secondary executor for slow interval jobs
+	 */
+	public void setupProcessors(ScheduledExecutorService secondaryExecutor) {
+	}
+
+	/**
+	 * Add {@link CounterStatisticManager} to {@link Diagnose} resource.
+	 * 
+	 * @param health {@link CounterStatisticManager} to add.
+	 */
+	protected void addServerStatistic(CounterStatisticManager health) {
+		diagnoseStatistics.add(health);
+		Resource child = getRoot().getChild(Diagnose.RESOURCE_NAME);
+		if (child instanceof Diagnose) {
+			((Diagnose) child).update(diagnoseStatistics);
+			LOGGER.info("{} {} added to diagnose resource.", health.getTag(), health.getClass().getSimpleName());
+		} else {
+			LOGGER.info("{} {} not added, diagnose resource missing.", health.getTag(),
+					health.getClass().getSimpleName());
+		}
 	}
 }

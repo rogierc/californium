@@ -91,8 +91,10 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Server handshaker does the protocol handshaking from the point of view of a
- * server. It is message-driven by the parent {@link Handshaker} class. The
- * message flow is depicted in
+ * server.
+ * <p>
+ * It is message-driven by the parent {@link Handshaker} class. The message flow
+ * is depicted in
  * <a href="https://tools.ietf.org/html/rfc6347#page-21" target= "_blank">Figure
  * 1</a>.
  * 
@@ -146,13 +148,11 @@ public class ServerHandshaker extends Handshaker {
 	/** Does the server use session id? */
 	private final boolean useSessionId;
 
-	/** certificate based client authentication mode */
+	/** certificate based client authentication mode. */
 	private final CertificateAuthenticationMode clientAuthenticationMode;
 
 	/** Is the client's address verified? */
 	private final boolean useHelloVerifyRequest;
-	/** Is the client's address verified for PSK? */
-	private final boolean useHelloVerifyRequestForPsk;
 
 	/**
 	 * Cipher suite selector.
@@ -169,10 +169,10 @@ public class ServerHandshaker extends Handshaker {
 
 	/**
 	 * Secure renegotiation mode.
-	 * 
+	 * <p>
 	 * Californium doesn't support renegotiation at all, but RFC5746 requests to
 	 * update to a minimal version.
-	 * 
+	 * <p>
 	 * See <a href="https://tools.ietf.org/html/rfc5746" target="_blank">RFC
 	 * 5746</a> for additional details.
 	 * 
@@ -207,15 +207,6 @@ public class ServerHandshaker extends Handshaker {
 	 * @since 3.0
 	 */
 	private final List<CertificateKeyAlgorithm> supportedCertificateKeyAlgorithms;
-
-	/**
-	 * Support the deprecated CID extension before version 9 of <a href=
-	 * "https://datatracker.ietf.org/doc/draft-ietf-tls-dtls-connection-id/"
-	 * target="_blank">Draft dtls-connection-id</a>.
-	 * 
-	 * @since 3.0
-	 */
-	private final boolean supportDeprecatedCid;
 
 	private CipherSuiteParameters cipherSuiteParameters;
 
@@ -258,7 +249,6 @@ public class ServerHandshaker extends Handshaker {
 	 * @throws NullPointerException if any of the provided parameter is
 	 *             {@code null}
 	 */
-	@SuppressWarnings("deprecation")
 	public ServerHandshaker(long initialRecordSequenceNo, int initialMessageSequenceNo, RecordLayer recordLayer,
 			ScheduledExecutorService timer, Connection connection, DtlsConnectorConfig config) {
 		super(initialRecordSequenceNo, initialMessageSequenceNo, recordLayer, timer, connection, config);
@@ -271,14 +261,12 @@ public class ServerHandshaker extends Handshaker {
 		this.clientAuthenticationMode = config.get(DtlsConfig.DTLS_CLIENT_AUTHENTICATION_MODE);
 		this.useSessionId = config.get(DtlsConfig.DTLS_SERVER_USE_SESSION_ID);
 		this.useHelloVerifyRequest = config.get(DtlsConfig.DTLS_USE_HELLO_VERIFY_REQUEST);
-		this.useHelloVerifyRequestForPsk = this.useHelloVerifyRequest && config.get(DtlsConfig.DTLS_USE_HELLO_VERIFY_REQUEST_FOR_PSK);
 
 		// the server handshake uses the config with exchanged roles!
 		this.supportedClientCertificateTypes = config.getTrustCertificateTypes();
 		this.supportedServerCertificateTypes = config.getIdentityCertificateTypes();
 		this.supportedSignatureAndHashAlgorithms = config.getSupportedSignatureAlgorithms();
 		this.supportedCertificateKeyAlgorithms = config.getSupportedCertificateKeyAlgorithm();
-		this.supportDeprecatedCid = config.get(DtlsConfig.DTLS_SUPPORT_DEPRECATED_CID);
 		setExpectedStates(CLIENT_HELLO);
 	}
 
@@ -347,7 +335,7 @@ public class ServerHandshaker extends Handshaker {
 
 	/**
 	 * Start initial timeout for internal API calls.
-	 * 
+	 * <p>
 	 * Processing the first received flight has no pending timeout for the last
 	 * flight. Therefore start an empty dummy flight to schedule a timeout.
 	 * 
@@ -377,7 +365,7 @@ public class ServerHandshaker extends Handshaker {
 	/**
 	 * If the server requires mutual authentication, the client must send its
 	 * certificate.
-	 * 
+	 * <p>
 	 * Calls {@link #processCertificateVerified()} on available verification
 	 * result.
 	 * 
@@ -437,9 +425,10 @@ public class ServerHandshaker extends Handshaker {
 	/**
 	 * Called, when the server received the client's {@link Finished} message.
 	 * Generate a {@link DTLSFlight} containing the
-	 * {@link ChangeCipherSpecMessage} and {@link Finished} message. This flight
-	 * will not be retransmitted, unless we receive the same finish message in
-	 * the future; then, we retransmit this flight.
+	 * {@link ChangeCipherSpecMessage} and {@link Finished} message.
+	 * <p>
+	 * This flight will not be retransmitted, unless we receive the same finish
+	 * message in the future; then, we retransmit this flight.
 	 * 
 	 * @param message the client's {@link Finished} message.
 	 * @throws HandshakeException if the client did not send the required
@@ -484,7 +473,7 @@ public class ServerHandshaker extends Handshaker {
 
 	/**
 	 * Called after the server receives a {@link ClientHello} handshake message.
-	 * 
+	 * <p>
 	 * Determines common security parameters and prepares to create the
 	 * response. If a certificate based cipher suite is shared, request the
 	 * certificate identity and calls {@link #processClientHello(ClientHello)}
@@ -510,7 +499,7 @@ public class ServerHandshaker extends Handshaker {
 			throw new HandshakeException("Client does not propose a common cipher suite",
 					new AlertMessage(AlertLevel.FATAL, AlertDescription.HANDSHAKE_FAILURE));
 		}
-		if (useHelloVerifyRequest && !useHelloVerifyRequestForPsk && !clientHello.hasCookie()) {
+		if (useHelloVerifyRequest && !clientHello.hasCookie()) {
 			SessionId sessionId = getSession().getSessionIdentifier();
 			if (sessionId.isEmpty() || !sessionId.equals(clientHello.getSessionId())) {
 				// no cookie, no resumption => only PSK to reduce amplification
@@ -770,7 +759,7 @@ public class ServerHandshaker extends Handshaker {
 	/**
 	 * Retrieves the preshared key from the identity hint and then generates the
 	 * master secret.
-	 * 
+	 * <p>
 	 * Calls {@link #processMasterSecret()} on available credentials.
 	 * 
 	 * @param message the client's key exchange message.
@@ -786,7 +775,7 @@ public class ServerHandshaker extends Handshaker {
 	/**
 	 * Retrieves the preshared key from the identity hint and then generates the
 	 * master secret using also the result of the ECDHE key exchange.
-	 * 
+	 * <p>
 	 * Calls {@link #processMasterSecret()} on available credentials.
 	 * 
 	 * @param message the client's key exchange message.
@@ -904,25 +893,21 @@ public class ServerHandshaker extends Handshaker {
 		if (supportsConnectionId()) {
 			ConnectionIdExtension connectionIdExtension = clientHello.getConnectionIdExtension();
 			if (connectionIdExtension != null) {
-				boolean useDeprecatedCid = connectionIdExtension.useDeprecatedCid();
-				if (!useDeprecatedCid || supportDeprecatedCid) {
-					ConnectionId connectionId = getReadConnectionId();
-					ConnectionIdExtension extension = ConnectionIdExtension.fromConnectionId(connectionId,
-							connectionIdExtension.getType());
-					serverHello.addExtension(extension);
-					DTLSContext context = getDtlsContext();
-					context.setWriteConnectionId(connectionIdExtension.getConnectionId());
-					context.setReadConnectionId(connectionId);
-					context.setDeprecatedCid(useDeprecatedCid);
-				}
+				ConnectionId connectionId = getReadConnectionId();
+				ConnectionIdExtension extension = ConnectionIdExtension.fromConnectionId(connectionId);
+				serverHello.addExtension(extension);
+				DTLSContext context = getDtlsContext();
+				context.setWriteConnectionId(connectionIdExtension.getConnectionId());
+				context.setReadConnectionId(connectionId);
 			}
 		}
 	}
 
 	/**
-	 * Negotiates the version to be used. It will return the lower of that
-	 * suggested by the client in the client hello and the highest supported by
-	 * the server.
+	 * Negotiates the version to be used.
+	 * <p>
+	 * It will return the lower of that suggested by the client in the client
+	 * hello and the highest supported by the server.
 	 * 
 	 * @param clientVersion the suggested version by the client.
 	 * @return the version to be used in the handshake.
@@ -947,7 +932,6 @@ public class ServerHandshaker extends Handshaker {
 	 * <p>
 	 * Delegates the selection calling
 	 * {@link CipherSuiteSelector#select(CipherSuiteParameters)}.
-	 * <p>
 	 * 
 	 * @param clientHello the <em>CLIENT_HELLO</em> message.
 	 * @throws HandshakeException if this server's configuration does not
@@ -1101,9 +1085,10 @@ public class ServerHandshaker extends Handshaker {
 	}
 
 	/**
-	 * Get list of common supported certificate types. If the extension is
-	 * available, used it to find a supported certificate type. If the extension
-	 * is not available, check, if X_509 is supported.
+	 * Get list of common supported certificate types.
+	 * <p>
+	 * If the extension is available, used it to find a supported certificate
+	 * type. If the extension is not available, check, if X_509 is supported.
 	 * 
 	 * @param certTypeExt certificate type extension. {@code null}, if not
 	 *            available.

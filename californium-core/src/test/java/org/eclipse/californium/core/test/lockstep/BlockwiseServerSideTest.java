@@ -60,6 +60,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.californium.TestTools;
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapServer;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.coap.Request;
@@ -67,11 +68,10 @@ import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.coap.TestResource;
 import org.eclipse.californium.core.config.CoapConfig;
 import org.eclipse.californium.core.network.UdpMatcher;
-import org.eclipse.californium.core.network.interceptors.MessageInterceptorAdapter;
+import org.eclipse.californium.core.network.interceptors.MessageInterceptor;
 import org.eclipse.californium.core.network.stack.BlockwiseLayer;
 import org.eclipse.californium.core.coap.Token;
 import org.eclipse.californium.core.coap.option.StandardOptionRegistry;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.core.test.MessageExchangeStoreTool.CoapTestEndpoint;
 import org.eclipse.californium.elements.EndpointContext;
 import org.eclipse.californium.elements.MapBasedEndpointContext;
@@ -84,7 +84,6 @@ import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.rule.LoggingRule;
 import org.eclipse.californium.elements.rule.TestNameLoggerRule;
 import org.eclipse.californium.elements.rule.TestTimeRule;
-import org.eclipse.californium.elements.util.TestCondition;
 import org.eclipse.californium.elements.util.TestConditionTools;
 import org.eclipse.californium.rule.CoapNetworkRule;
 import org.eclipse.californium.rule.CoapThreadsRule;
@@ -410,12 +409,8 @@ public class BlockwiseServerSideTest {
 
 		time.addTestTimeShift((long) (TEST_BLOCKWISE_STATUS_LIFETIME * 0.75), TimeUnit.MILLISECONDS);
 
-		TestConditionTools.waitForCondition(TEST_BLOCKWISE_STATUS_LIFETIME, TEST_BLOCKWISE_STATUS_INTERVAL, TimeUnit.MILLISECONDS,  new TestCondition() {
-
-			@Override
-			public boolean isFulFilled() throws IllegalStateException {
-				return serverEndpoint.getStack().getLayer(BlockwiseLayer.class).isEmpty();
-			}
+		TestConditionTools.waitForCondition(TEST_BLOCKWISE_STATUS_LIFETIME, TEST_BLOCKWISE_STATUS_INTERVAL, TimeUnit.MILLISECONDS,  () -> {
+			return serverEndpoint.getStack().getLayer(BlockwiseLayer.class).isEmpty();
 		});
 
 		assertTrue(serverEndpoint.getStack().getLayer(BlockwiseLayer.class).isEmpty());
@@ -435,7 +430,7 @@ public class BlockwiseServerSideTest {
 		client.sendRequest(CON, GET, tok, ++mid).path(RESOURCE_PATH).block2(1, false, 32).go();
 		client.expectResponse(ACK, CONTENT, tok, mid).block2(1, true, 32).payload(respPayload.substring(32, 64)).go();
 
-		serverEndpoint.addInterceptor(new MessageInterceptorAdapter() {
+		serverEndpoint.addInterceptor(new MessageInterceptor() {
 
 			@Override
 			public void receiveRequest(Request request) {
@@ -558,12 +553,8 @@ public class BlockwiseServerSideTest {
 
 		time.addTestTimeShift((long) (TEST_BLOCKWISE_STATUS_LIFETIME * 0.75), TimeUnit.MILLISECONDS);
 
-		TestConditionTools.waitForCondition(TEST_BLOCKWISE_STATUS_LIFETIME, TEST_BLOCKWISE_STATUS_INTERVAL, TimeUnit.MILLISECONDS,  new TestCondition() {
-
-			@Override
-			public boolean isFulFilled() throws IllegalStateException {
-				return serverEndpoint.getStack().getLayer(BlockwiseLayer.class).isEmpty();
-			}
+		TestConditionTools.waitForCondition(TEST_BLOCKWISE_STATUS_LIFETIME, TEST_BLOCKWISE_STATUS_INTERVAL, TimeUnit.MILLISECONDS,  () -> {
+			return serverEndpoint.getStack().getLayer(BlockwiseLayer.class).isEmpty();
 		});
 
 		assertTrue(serverEndpoint.getStack().getLayer(BlockwiseLayer.class).isEmpty());
@@ -790,7 +781,7 @@ public class BlockwiseServerSideTest {
 
 		logging.setLoggingLevel("ERROR", UdpMatcher.class);
 
-		serverEndpoint.addInterceptor(new MessageInterceptorAdapter() {
+		serverEndpoint.addInterceptor(new MessageInterceptor() {
 
 			@Override
 			public void receiveRequest(Request request) {

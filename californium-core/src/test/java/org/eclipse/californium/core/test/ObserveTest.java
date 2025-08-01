@@ -46,6 +46,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.californium.TestTools;
 import org.eclipse.californium.core.CoapClient;
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapObserveRelation;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.CoapResponse;
@@ -61,13 +62,11 @@ import org.eclipse.californium.core.network.CoapEndpoint;
 import org.eclipse.californium.core.network.Endpoint;
 import org.eclipse.californium.core.network.EndpointManager;
 import org.eclipse.californium.core.network.interceptors.MessageInterceptor;
-import org.eclipse.californium.core.network.interceptors.MessageInterceptorAdapter;
 import org.eclipse.californium.core.network.interceptors.MessageTracer;
 import org.eclipse.californium.core.observe.Observation;
 import org.eclipse.californium.core.observe.ObservationStore;
 import org.eclipse.californium.core.observe.ObservationStoreException;
 import org.eclipse.californium.core.observe.ObservationUtil;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.elements.EndpointContext;
 import org.eclipse.californium.elements.category.Medium;
 import org.eclipse.californium.elements.config.Configuration;
@@ -258,6 +257,7 @@ public class ObserveTest {
 		}
 
 		// still only one notification (the response) is received
+		handler.noLogOnFail();
 		assertFalse(handler.waitOnLoadCalls(2, 1000, TimeUnit.MILLISECONDS));
 		assertEquals(repeat, resetCounter.get()); // repeat RST received
 		// no RST delivered (interceptor)
@@ -970,10 +970,9 @@ public class ObserveTest {
 		serverEndpoint.addInterceptor(new MessageTracer());
 		int count = counter.incrementAndGet();
 		CoapServer server = new CoapServer(config);
-		server.setExecutors(ExecutorsUtil.newScheduledThreadPool(//
+		server.setExecutor(ExecutorsUtil.newProtocolScheduledThreadPool(//
 				config.get(CoapConfig.PROTOCOL_STAGE_THREAD_COUNT),
-				new NamedThreadFactory("CoapServer(main):" + count + "#")), //$NON-NLS-1$
-				ExecutorsUtil.newDefaultSecondaryScheduler("CoapServer(secondary):" + count + "#"), false);
+				new NamedThreadFactory("CoapServer(main):" + count + "#")), false); //$NON-NLS-1$
 		server.addEndpoint(serverEndpoint);
 		resourceX = new MyResource(TARGET_X);
 		resourceY = new MyResource(TARGET_Y);
@@ -997,7 +996,7 @@ public class ObserveTest {
 		return server;
 	}
 
-	private class ClientMessageInterceptor extends MessageInterceptorAdapter {
+	private class ClientMessageInterceptor implements MessageInterceptor {
 
 		private int counter = 0; // counts the incoming responses
 
@@ -1050,7 +1049,7 @@ public class ObserveTest {
 		}
 	}
 
-	private class ServerMessageInterceptor extends MessageInterceptorAdapter {
+	private class ServerMessageInterceptor implements MessageInterceptor {
 
 		private final AtomicInteger resetCounter;
 
@@ -1074,7 +1073,7 @@ public class ObserveTest {
 		}
 	}
 
-	private class MessageObserverCounterMessageInterceptor extends MessageInterceptorAdapter {
+	private class MessageObserverCounterMessageInterceptor implements MessageInterceptor {
 
 		private int messageObserverCounter = 0;
 

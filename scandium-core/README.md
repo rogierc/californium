@@ -31,9 +31,9 @@ builder.setAddress(new InetSocketAddress(5684));
 
 ## PSK
 
-PSK credentials are provided using a implementation of the [AdvancedPskStore](src/main/java/org/eclipse/californium/scandium/dtls/pskstore/AdvancedPskStore.java) interface.
+PSK credentials are provided using a implementation of the [dPskStore](src/main/java/org/eclipse/californium/scandium/dtls/pskstore/PskStore.java) interface.
 
-For demonstration, two implementations for server- and client-usage are available ([AdvancedMultiPskStore](src/main/java/org/eclipse/californium/scandium/dtls/pskstore/AdvancedMultiPskStore.java) and [AdvancedSinglePskStore](src/main/java/org/eclipse/californium/scandium/dtls/pskstore/AdvancedSinglePskStore.java)).
+For demonstration, two implementations for server- and client-usage are available ([MultiPskStore](src/main/java/org/eclipse/californium/scandium/dtls/pskstore/MultiPskStore.java) and [SinglePskStore](src/main/java/org/eclipse/californium/scandium/dtls/pskstore/SinglePskStore.java)).
 
 Using the interface enables also implementations, which are providing the credentials dynamically. If that is done in a way with larger latency (e.g. remote call), also a asynchronous implementation is possible. Such a design with larger latency will still cause delays in the handshakes and limit the possible handshakes in a period of time, but has only slightly effects on the other ongoing traffic.
 
@@ -43,19 +43,19 @@ Example:
 ...
 DtlsConnectorConfig.Builder builder = DtlsConnectorConfig.builder(configuration);
 builder.setAddress(new InetSocketAddress(5684));
-AdvancedSinglePskStore pskStore = new AdvancedSinglePskStore("me", "secret".getBytes());
-builder.setAdvancedPskStore(pskStore);
+SinglePskStore pskStore = new SinglePskStore("me", "secret".getBytes());
+builder.setPskStore(pskStore);
 
 DTLSConnector connector = new DTLSConnector(builder.build());
 ```
 
 ## RPK/X509
 
-Certificate based credentials are provided using a implementation of the [CertificateProvider](src/main/java/org/eclipse/californium/scandium/dtls/x509/CertificateProvider.java) interface. And to verify certificates of the other peers, provide a implementation of the [NewAdvancedCertificateVerifier](src/main/java/org/eclipse/californium/scandium/dtls/x509/NewAdvancedCertificateVerifier.java).
+Certificate based credentials are provided using a implementation of the [CertificateProvider](src/main/java/org/eclipse/californium/scandium/dtls/x509/CertificateProvider.java) interface. And to verify certificates of the other peers, provide a implementation of the [CertificateVerifier](src/main/java/org/eclipse/californium/scandium/dtls/x509/CertificateVerifier.java).
 
 For demonstration, two implementations of the `CertificateProvider` are available, the [SingleCertificateProvider](src/main/java/org/eclipse/californium/scandium/dtls/x509/SingleCertificateProvider.java) (for simple setups or setups with earlier versions of Californium), and the [KeyManagerCertificateProvider](src/main/java/org/eclipse/californium/scandium/dtls/x509/KeyManagerCertificateProvider.java) (for setups with multiple certificates in order to support different certificate types and/or other subjects/servernames (SNI)).
 
-Also for demonstration, one implementation of the `NewAdvancedCertificateVerifier` is available, the [StaticNewAdvancedCertificateVerifier](src/main/java/org/eclipse/californium/scandium/dtls/x509/StaticNewAdvancedCertificateVerifier.java).
+Also for demonstration, one implementation of the `CertificateVerifier` is available, the [StaticCertificateVerifier](src/main/java/org/eclipse/californium/scandium/dtls/x509/StaticCertificateVerifier.java).
 
 Using the interfaces enables also implementations, which are providing the credentials dynamically. If that is done in a way with larger latency (e.g. remote call), also a asynchronous implementation is possible. Such a design with larger latency will still cause delays in the handshakes and limit the possible handshakes in a period of time, but has only slightly effects on the other ongoing traffic.
 
@@ -74,11 +74,37 @@ builder.setAddress(new InetSocketAddress(5684));
 SingleCertificateProvider certificate = new SingleCertificateProvider(serverCredentials.getPrivateKey(), serverCredentials.getCertificateChain());
 builder.setCertificateIdentityProvider(certificate);
 
-NewAdvancedCertificateVerifier trust = StaticNewAdvancedCertificateVerifier.builder()
+CertificateVerifier trust = StaticCertificateVerifier.builder()
    .setTrustedCertificates(serverTrusts.getTrustedCertificates).build();
-builder.setAdvancedCertificateVerifier(trust);
+builder.setCertificateVerifier(trust);
 
 DTLSConnector connector = new DTLSConnector(builder.build());
+```
+
+Starting with Californium 4.0 the support for anonymous clients is extended in order to match existing http authentication mechanisms. In those case the server authenticates itself using a certificate (RPK or x509) but the client stays anonymous in the DTLS handshake. It is the consider that such a client gets authorized by the application using an `ApplicationAuthorizer` by the means of the application. The new configuration parameter `DTLS.APPLICATION_AUTHORIZATION_TIMEOUT` enables to remove such anonymous clients after that timeout when the application doesn't authorize it. One simple implementation may be to support an CoAP2HTTP-cross-proxy, with a HTTP server using username/password or tokens to authorize the clients. The actual authentication, e.g. converting a custom coap-option into an http token header is then intended to be implemented in the proxy-application.
+
+The `ApplicationAuthorizer` is implemented by the `DTLSConnector`and is available at the `CoapEndpoint` and the `Exchange`.
+
+Specific `CoapResource` implementation:
+
+```
+@Override
+public void handlePOST(final CoapExchange exchange) {
+   // ... do some check, e.g. forward request using http
+   // authorized := result of authorization
+   if (exchange.getSourcePrincipal() == null) {
+      // anonymous client
+      ApplicationAuthorizer authorizer = getApplicationAuthorizer();
+      if (authorizer != null) {
+        if (authorized) {
+           authorizer.authorize(exchange.getSourceContext(),
+              ApplicationPrincipal.ANONYMOUS);
+        } else {
+           authorizer.rejectAuthorization(exchange.getSourceContext());
+        }
+     }
+   }
+}
 ```
 
 ## Additional Parameters
@@ -119,7 +145,7 @@ See [Californium Project Plan](https://projects.eclipse.org/projects/iot.califor
     <dependency>
             <groupId>org.eclipse.californium</groupId>
             <artifactId>scandium</artifactId>
-            <version>3.12.0</version>
+            <version>4.0.0-M3</version>
     </dependency>
     ...
   </dependencies>
@@ -191,13 +217,13 @@ Also Starting with 3.0.0-RC1, a server may use a `X509KeyManager` in order to pr
 - TLS_ECDHE_PSK_WITH_AES_128_CCM_8_SHA256
 - TLS_ECDHE_PSK_WITH_AES_128_CCM_SHA256
 - TLS_ECDHE_PSK_WITH_AES_128_GCM_SHA256
-- *TLS_ECDHE_PSK_WITH_AES_256_GCM_SHA378*
+- *TLS_ECDHE_PSK_WITH_AES_256_GCM_SHA384*
 - TLS_PSK_WITH_AES_128_CCM
 - TLS_PSK_WITH_AES_128_CCM_8
 - TLS_PSK_WITH_AES_128_GCM_SHA256
 - TLS_PSK_WITH_AES_256_CCM
 - TLS_PSK_WITH_AES_256_CCM_8
-- *TLS_PSK_WITH_AES_256_GCM_SHA378*
+- *TLS_PSK_WITH_AES_256_GCM_SHA384*
 - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
 - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
 
@@ -223,9 +249,7 @@ ARIA cipher suites since 3.9.0, requires support by JCE, e.g. BouncyCastle 1.72:
 - TLS_ECDHE_RSA_WITH_ARIA_128_GCM_SHA256
 - TLS_ECDHE_RSA_WITH_ARIA_256_GCM_SHA384
 
-Note: the *CBC* cipher suites are not longer recommended for new deployments!
-
-Note: *SHA378* in the cipher suite names are typos. It must be *SHA384*. The straight forward fix would break the API, therefore the fix is postponed to 4.0 (no schedule for now)!
+**Note:** the *CBC* cipher suites are not longer recommended for new deployments!
 
 ## Supported Signature- and Hash-Algorithms
 
@@ -234,7 +258,7 @@ Note: *SHA378* in the cipher suite names are typos. It must be *SHA384*. The str
 - *ED25519* (if supported by JCE)
 - *ED448* (if supported by JCE)
 - *SHA1_WITH_ECDSA* (if explicitly enabled)
-- *SHA378_WITH_ECDSA* (if explicitly enabled)
+- *SHA384_WITH_ECDSA* (if explicitly enabled)
 - *SHA512_WITH_ECDSA* (if explicitly enabled)
 
 ## Supported Curves
@@ -267,20 +291,34 @@ Supported extensions:
 - [RFC 8422 - Elliptic Curve Cryptography (ECC) Update](https://tools.ietf.org/html/rfc8422)
 - [RFC 8449 - Record Size Limit Extension](https://tools.ietf.org/html/rfc8449)
 - [RFC 9146 - Connection Identifiers for DTLS 1.2](https://www.rfc-editor.org/rfc/rfc9146.html)
+- [draft-ietf-tls-keylogfile - The SSLKEYLOGFILE Format for TLS](https://tlswg.org/sslkeylogfile/draft-ietf-tls-keylogfile.html)
+
+### Using WireShark with TLSKEYLOGFILE
+
+Since 4.0.0-M3 Californium support [draft-ietf-tls-keylogfile - The SSLKEYLOGFILE Format for TLS](https://tlswg.org/sslkeylogfile/draft-ietf-tls-keylogfile.html).
+
+To use it, enable it in the "Californium3.properties" using
+
+```
+# Enable TLSKEYLOG_FILE. The file contains sensitive keys for encryption!
+# Use it with reasonable care!
+# Default: false
+DTLS.TLSKEYLOG_FILE=logs/sslkeylogs.log
+```
+
+Then also add that file to the Wireshark 
+
+Settings -> Protocols -> TLS (Pre)-Master-Secret log filename.
+
+See also [Decrypt messages using the TLSKEYLOG File](https://github.com/eclipse-californium/californium/wiki/Logs-and-IP-Capturing-%E2%80%90-How-To-Provide-The-Right-Information#decrypt-messages-using-the-tlskeylog-file).
 
 ## Support for x25519 and ed25519
 
 Support for X25519 is only available using java 11 (or newer) for execution.
-Support for ED25519 is only available using java 15 (or newer) for execution,
-or java 11 (or newer) and a third party library [ed25519-java](https://github.com/str4d/ed25519-java). Building  _Scandium_  using java 11 therefore includes that third party library to the classpath. Use
+Support for ED25519 is only available using java 17 (or newer) for execution.
+Earlier versions of Californium also supported to use [ed25519-java](https://github.com/str4d/ed25519-java) at runtime, but that library seems to be not maintained for long and therefore the support in Californium has been removed.
 
-```sh
-mvn clean install -Dno.net.i2p.crypto.eddsa=true
-```
-
-if this library should not be included.
-
-*Note:* using the oracle build 28 of openjdk 11 uncovers, that calling `EdDSAEngine.engineSetParameter(null)` fails with `ǸullPointerException` instead of `InvalidAlgorithmParameterException`. That causes to fail the verification of the signature at all. Using the aptopen build seems not to call `EdDSAEngine.engineSetParameter(null)` and therefore works. [ed25519-java](https://github.com/str4d/ed25519-java) seems to be not longer maintained. It's therefore recommended to update to newer jdks (e.g. 17) or to use Bouncy Castle (see next section, even if the Bouncy Castle support is experimental).
+*Note:* using the oracle build 28 of openjdk 11 uncovers, that calling `EdDSAEngine.engineSetParameter(null)` fails with `ǸullPointerException` instead of `InvalidAlgorithmParameterException`. That causes to fail the verification of the signature at all. Using the aptopen build seems not to call `EdDSAEngine.engineSetParameter(null)` and therefore works.
 
 ## Support for Bouncy Castle
 
@@ -289,8 +327,8 @@ Starting with 3.0.0-RC1 an experimental support for using [Bouncy Castle](https:
 ```
 <properties>
 	<bc.art>jdk18on</bc.art>
-	<bc.version>1.77</bc.version>
-	<slf4j.version>1.7.36</slf4j.version>
+	<bc.version>1.78.1</bc.version>
+	<slf4j.version>2.0.16</slf4j.version>
 </properties>
 <dependencies>
 	<dependency>
@@ -321,7 +359,7 @@ Starting with 3.0.0-RC1 an experimental support for using [Bouncy Castle](https:
 </dependencies>
 ```
 
-(With 3.3 the tests are using the updated version 1.70 instead of the 1.69, with 3.8 it is 1.72, with 3.9 it is 1.74, and with 3.10 it is 1.77).
+(With Californium 3.3 the tests are using the updated version bc 1.70 instead of the 1.69, and with Californium 4.0.0 bc 1.78.1 is used).
 
 And setup a environment variable `CALIFORNIUM_JCE_PROVIDER` using the value `BC` (see [JceProviderUtil](../element-connector/src/main/java/org/eclipse/californium/elements/util/JceProviderUtil.java) for more details) or use the java `System.property` `CALIFORNIUM_JCE_PROVIDER` to do so.
 

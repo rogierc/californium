@@ -20,13 +20,13 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.CoapServer;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.config.CoapConfig;
 import org.eclipse.californium.core.network.CoapEndpoint;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.core.server.resources.MyIpResource;
 import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.config.TcpConfig;
@@ -67,13 +67,9 @@ public class ExampleCoapServer {
 	/**
 	 * Special configuration defaults handler.
 	 */
-	private static final DefinitionsProvider DEFAULTS = new DefinitionsProvider() {
-
-		@Override
-		public void applyDefinitions(Configuration config) {
-			config.set(CoapConfig.COAP_PORT, DEFAULT_COAP_PORT);
-			config.set(CoapConfig.COAP_SECURE_PORT, DEFAULT_COAP_SECURE_PORT);
-		}
+	private static final DefinitionsProvider DEFAULTS = (config) -> {
+		config.set(CoapConfig.COAP_PORT, DEFAULT_COAP_PORT);
+		config.set(CoapConfig.COAP_SECURE_PORT, DEFAULT_COAP_SECURE_PORT);
 	};
 
 	private CoapServer coapServer;
@@ -100,6 +96,7 @@ public class ExampleCoapServer {
 
 			@Override
 			public void handleGET(CoapExchange exchange) {
+				checkContentFormat(exchange, MediaTypeRegistry.TEXT_PLAIN);
 				String payload = "Hi! I am the " + scheme + " server on port " + port + ". Request "
 						+ counter.incrementAndGet() + ".";
 				exchange.setMaxAge(15);
@@ -112,6 +109,7 @@ public class ExampleCoapServer {
 
 			@Override
 			public void handlePOST(CoapExchange exchange) {
+				checkContentFormat(exchange, MediaTypeRegistry.TEXT_PLAIN);
 				String message = exchange.advanced().getRequest().getPayloadString();
 				String payload = "Hi, " + message + "! I am the " + scheme + " server on port " + port + ". Request "
 						+ counter.incrementAndGet() + ".";

@@ -18,6 +18,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -28,7 +29,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import javax.security.auth.DestroyFailedException;
 
 import org.eclipse.californium.cloud.util.ResourceParser;
-import org.eclipse.californium.elements.util.StandardCharsets;
 import org.eclipse.californium.elements.util.StringUtil;
 import org.eclipse.californium.scandium.util.SecretUtil;
 import org.slf4j.Logger;
@@ -36,7 +36,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Web application user parser.
- * 
+ * <p>
  * Format:
  * 
  * <pre>
@@ -59,7 +59,7 @@ import org.slf4j.LoggerFactory;
  * double-quotes ({@code "}). An entry with {@code *.s3} is used to setup the
  * default S3 credentials for user definitions without explicit {@code .s3}
  * definition.
- * 
+ * <p>
  * Example:
  * 
  * <pre>

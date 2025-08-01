@@ -33,13 +33,12 @@
  ******************************************************************************/
 package org.eclipse.californium.core;
 
-import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.function.BiConsumer;
 
 import org.eclipse.californium.core.coap.ClientObserveRelation;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.network.Endpoint;
-import org.eclipse.californium.core.observe.NotificationListener;
 
 /**
  * A CoapObserveRelation is a client-side control handle. It represents a CoAP
@@ -52,17 +51,18 @@ public class CoapObserveRelation extends ClientObserveRelation {
 	/** The current notification. */
 	private volatile CoapResponse current = null;
 
-	private volatile NotificationListener notificationListener;
+	private volatile BiConsumer<Request, Response> notificationListener;
 
 	/**
 	 * Constructs a new CoapObserveRelation with the specified request.
 	 *
 	 * @param request the request
 	 * @param endpoint the endpoint
-	 * @param executor the executor to schedule the reregistration.
+	 * @throws IllegalArgumentException if endpoint has no executor
+	 * @since 4.0 (removed executor from arguments)
 	 */
-	protected CoapObserveRelation(Request request, Endpoint endpoint, ScheduledThreadPoolExecutor executor) {
-		super(request, endpoint, executor);
+	protected CoapObserveRelation(Request request, Endpoint endpoint) {
+		super(request, endpoint);
 	}
 
 	/**
@@ -115,15 +115,15 @@ public class CoapObserveRelation extends ClientObserveRelation {
 		}
 	}
 
-	public void setNotificationListener(NotificationListener listener) {
+	public void setNotificationListener(BiConsumer<Request, Response>  listener) {
 		notificationListener = listener;
 	}
 
 	/**
 	 * Sets the current response or notification.
 	 *
-	 * Use {@link #orderer} to filter deprecated responses over UDP.
-	 * Responses over TCP are already in order.
+	 * Use {@link #orderer} to filter deprecated responses over UDP. Responses
+	 * over TCP are already in order.
 	 *
 	 * @param response the response or notification
 	 * @return {@code true}, response is accepted by {@link #orderer},

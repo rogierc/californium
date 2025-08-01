@@ -14,12 +14,12 @@
  ********************************************************************************/
 package org.eclipse.californium.cloud.s3.util;
 
-import java.net.URI;
 import java.net.URISyntaxException;
-import java.security.PrivateKey;
-import java.security.PublicKey;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
@@ -27,6 +27,10 @@ import java.util.concurrent.TimeUnit;
 import org.eclipse.californium.cloud.BaseServer;
 import org.eclipse.californium.cloud.s3.S3ProxyServer;
 import org.eclipse.californium.cloud.s3.S3ProxyServer.S3ProxyConfig.S3Config;
+import org.eclipse.californium.cloud.s3.forward.BasicHttpForwardConfiguration;
+import org.eclipse.californium.cloud.s3.forward.HttpForwardConfiguration;
+import org.eclipse.californium.cloud.s3.forward.HttpForwardConfigurationProvider;
+import org.eclipse.californium.cloud.s3.forward.HttpForwardServiceManager;
 import org.eclipse.californium.cloud.s3.proxy.S3ProxyClient;
 import org.eclipse.californium.cloud.s3.proxy.S3ProxyClientProvider;
 import org.eclipse.californium.cloud.s3.proxy.S3ResourceStore;
@@ -34,6 +38,7 @@ import org.eclipse.californium.cloud.util.DeviceParser;
 import org.eclipse.californium.cloud.util.LinuxConfigParser;
 import org.eclipse.californium.cloud.util.ResourceStore;
 import org.eclipse.californium.elements.config.Configuration;
+import org.eclipse.californium.elements.util.SslContextUtil.Credentials;
 import org.eclipse.californium.elements.util.StringUtil;
 import org.eclipse.californium.elements.util.SystemResourceMonitors;
 import org.slf4j.Logger;
@@ -41,9 +46,9 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Domains.
- * 
+ * <p>
  * User, configurations and devices grouped in domains.
- * 
+ * <p>
  * Domains are defined in a file with format:
  * 
  * <pre>
@@ -76,12 +81,37 @@ import org.slf4j.LoggerFactory;
  * {@code [user_store = <user-store>]}
  * {@code [user_store_password64 = <user-store-password-base64>]}
  * {@code [user_store_password64 = <user-store-password-base64>]}
- * {@code [http_forward = <http forward destination>]}
- * {@code [http_authentication = Bearer <token>]} or {@code [http_authentication = <username>:<password>]}
- * {@code [http_device_identity_mode = NONE|HEADLINE|QUERY_PARAMETER]}
  * {@code [devices_replaced = true|false]}
+ * {@code [http_forward = <http forward destination>]}
+ * {@code [http_authentication = <http authentication>]}
+ * {@code [http_device_identity_mode = NONE|HEADLINE|QUERY_PARAMETER]}
+ * {@code [http_response_filter = <regex response filter>]}
+ * {@code [http_service_name = <java-http-forwarding-service>]}
+ * 
+ * With {@code <http authentication>}:
+ * {@code Bearer <bearer token>}
+ * {@code Header <http-header-name>:<http-header-value>}
+ * {@code PreBasic <username>:<password>}
+ * {@code <username>:<password>}
+ * 
  * </pre>
  * 
+ * If auto-provisioning is used, {@code devices_replaced} defines, that only new
+ * devices are allowed, or also old ones are replaced.
+ * <p>
+ * If http forwarding is used and a http authentication is provided, `Bearer`
+ * will be converted into an http-header `Authentication: Bearer
+ * {@code <bearer token>}`. `Header` will be added as http-header
+ * `{@code <http-header-name>:<http-header-value>}`. `PreBasic` will do a basic
+ * authentication in preemptive manner, it sends the credentials without prior
+ * request. If `{@code <username>:<password>}` is used, the credentials for
+ * basic authentication are only sent on request by the server.
+ * <p>
+ * The response filter for http forwarding is a regular expression, which on
+ * match, drops the http response-payload from being forwarded to the device. If
+ * no filter is provide or the filter is empty, the http response-payload is
+ * always dropped.
+ * <p>
  * The web application configuration {@code config_store} is defined using
  * format:
  * 
@@ -102,13 +132,13 @@ import org.slf4j.LoggerFactory;
  * 
  * For {@code device_store}, see {@link DeviceParser} and for {@code user_store}
  * see {@link WebAppUserParser}.
- * 
+ * <p>
  * The web application configuration is used in a generic way passing all the
  * sub-section values to the web application on login. The only specific access
  * is using the sub-section {@code <user-config>.config} and accesses the value
  * {@code "diagnose"} in order to enable proxy access to the CoAP-Diagnose
  * resource.
- * 
+ * <p>
  * The java-script-single-page-application supports these passed configuration
  * values:
  * 
@@ -133,7 +163,7 @@ import org.slf4j.LoggerFactory;
  * @since 3.12
  */
 public class Domains
-		implements S3ProxyClientProvider, WebAppUserProvider, WebAppConfigProvider, HttpForwardDestinationProvider {
+		implements S3ProxyClientProvider, WebAppUserProvider, WebAppConfigProvider, HttpForwardConfigurationProvider {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(Domains.class);
 
@@ -149,6 +179,14 @@ public class Domains
 	 * Section for web resources.
 	 */
 	public static final String WEB_SECTION = "web";
+	/**
+	 * Section for anonymous clients.
+	 */
+	public static final String ANONYOUS_SECTION = "anonymous";
+	/**
+	 * Field name for maximum devices.
+	 */
+	public static final String FIELD_MAX_DEVICES = "max_devices";
 
 	/**
 	 * Domain.
@@ -161,7 +199,7 @@ public class Domains
 		private S3ProxyClient deviceData;
 		/**
 		 * S3 client for management data.
-		 * 
+		 * <p>
 		 * May be {@code null}, if management data is loaded from file-system.
 		 */
 		private S3ProxyClient managementData;
@@ -174,15 +212,11 @@ public class Domains
 		 */
 		private ResourceStore<LinuxConfigParser> configStore;
 		/**
-		 * Http forward destination.
+		 * Http forwarding configuration.
+		 * 
+		 * @since 4.0
 		 */
-		private URI httpDestination;
-		/**
-		 * Http forward authentication.
-		 */
-		private String httpAuthentication;
-
-		private DeviceIdentityMode deviceIdentityMode;
+		private HttpForwardConfiguration httpForwardingConfiguration;
 
 		/**
 		 * Create domain instance.
@@ -203,14 +237,18 @@ public class Domains
 	 * Map of domain-names and domains.
 	 */
 	private final ConcurrentMap<String, Domain> domains = new ConcurrentHashMap<>();
-
+	/**
+	 * Domain to load web-resources, e.g. javascript app or ccs.
+	 */
 	private final Domain webDomain;
+
+	private final HttpForwardConfiguration anonymousHttpForwardingConfiguration;
 
 	/**
 	 * Create domains setup.
 	 * 
-	 * @param monitors monitor to reload resources
-	 * @param domainDefinition domain configuration
+	 * @param monitors monitor to reload resources.
+	 * @param domainDefinition domain configuration.
 	 * @param config Californium configuration.
 	 */
 	public Domains(SystemResourceMonitors monitors, LinuxConfigParser domainDefinition, Configuration config) {
@@ -218,6 +256,7 @@ public class Domains
 		int maxDevices = config.get(BaseServer.CACHE_MAX_DEVICES);
 		String web = domainDefinition.get(WEB_SECTION, "domain");
 		Domain webDomain = null;
+		HttpForwardConfiguration httpForwardingConfiguration = null;
 
 		this.monitors = monitors;
 		this.configuration = domainDefinition;
@@ -232,23 +271,26 @@ public class Domains
 					S3Config s3Config = new S3Config();
 					s3Config.concurrency = 200;
 					s3Config.apply(domainDefinition, section);
-					int max = domainDefinition.getInteger(section, "max_devices", maxDevices);
+					int max = domainDefinition.getInteger(section, FIELD_MAX_DEVICES, maxDevices);
 					domain.deviceData = S3ProxyServer.createS3Client(s3Config, staleDeviceThreshold, max);
-
-					String destination = domainDefinition.get(managementSection, "http_forward");
-					if (destination != null) {
+					List<String> domainConfigFields = HttpForwardServiceManager.getDomainConfigFields();
+					if (domainConfigFields != null) {
+						Map<String, String> fields = new HashMap<>();
+						for (String field : domainConfigFields) {
+							String value = domainDefinition.get(managementSection, field);
+							fields.put(field, value);
+						}
 						try {
-							domain.httpDestination = new URI(destination);
-							domain.httpAuthentication = domainDefinition.get(managementSection, "http_authentication");
-							String value = domainDefinition.getWithDefault(managementSection,
-									"http_device_identity_mode", "NONE");
-							domain.deviceIdentityMode = DeviceIdentityMode.valueOf(value);
-							LOGGER.info("{}: http forward {}, {}", name, destination, domain.deviceIdentityMode);
+							domain.httpForwardingConfiguration = BasicHttpForwardConfiguration.create(fields);
+							if (domain.httpForwardingConfiguration != null) {
+								LOGGER.info("{}: http forward {}, {}", name,
+										domain.httpForwardingConfiguration.getDestination(),
+										domain.httpForwardingConfiguration.getDeviceIdentityMode());
+							}
 						} catch (URISyntaxException e) {
-							LOGGER.warn("Failed to configure http forward '{}' for domain {}.", destination, section);
+							LOGGER.warn("Failed to configure http forward '{}' for domain {}.", e.getInput(), section);
 						}
 					}
-
 					s3Config = new S3Config();
 					s3Config.concurrency = 5;
 					s3Config.apply(domainDefinition, managementSection);
@@ -260,24 +302,44 @@ public class Domains
 						webDomain = domain;
 					}
 				}
+			} else if (ANONYOUS_SECTION.equals(section)) {
+				List<String> domainConfigFields = HttpForwardServiceManager.getDomainConfigFields();
+				if (domainConfigFields != null) {
+					Map<String, String> fields = new HashMap<>();
+					for (String field : domainConfigFields) {
+						String value = domainDefinition.get(section, field);
+						fields.put(field, value);
+					}
+					try {
+						httpForwardingConfiguration = BasicHttpForwardConfiguration.create(fields);
+						if (httpForwardingConfiguration != null) {
+							LOGGER.info("{}: http forward {}, {}", name, httpForwardingConfiguration.getDestination(),
+									httpForwardingConfiguration.getDeviceIdentityMode());
+						}
+					} catch (URISyntaxException e) {
+						LOGGER.warn("Failed to configure http forward '{}' for domain {}.", e.getInput(), section);
+					}
+				}
 			}
 		}
 		if (web != null && webDomain == null) {
 			webDomain = domains.get(web);
 		}
 		this.webDomain = webDomain;
+		this.anonymousHttpForwardingConfiguration = httpForwardingConfiguration;
 	}
 
 	/**
 	 * Load device credentials.
 	 * 
+	 * @param credentials server's credentials for DTLS 1.2 certificate based
+	 *            authentication
 	 * @param config Californium configuration.
-	 * @param privateKey private key for DTLS 1.2 device communication.
-	 * @param publicKey public key for DTLS 1.2 device communication.
 	 * @return domain device manager
 	 */
-	public DomainDeviceManager loadDevices(Configuration config, PrivateKey privateKey, PublicKey publicKey) {
+	public DomainDeviceManager loadDevices(Credentials credentials, Configuration config) {
 		long interval = config.get(BaseServer.DEVICE_CREDENTIALS_RELOAD_INTERVAL, TimeUnit.SECONDS);
+		long addTimeout = config.get(BaseServer.DEVICE_CREDENTIALS_ADD_TIMEOUT, TimeUnit.MILLISECONDS);
 		ConcurrentMap<String, ResourceStore<DeviceParser>> allDevices = new ConcurrentHashMap<>();
 
 		for (Entry<String, Domain> domainEntry : domains.entrySet()) {
@@ -295,17 +357,17 @@ public class Domains
 			String deviceStore = configuration.getWithDefault(managementSection, "device_store", "devices.txt");
 			String deviceStorePw = configuration.getWithDefault(managementSection, "device_store_password64",
 					password64);
-
+			DeviceParser deviceParser = new DeviceParser(true, replace,
+					HttpForwardServiceManager.getDeviceConfigFields());
 			ResourceStore<DeviceParser> devices = domain.managementData != null
-					? new S3ResourceStore<>(new DeviceParser(true, replace), domain.managementData)
-							.setTag("S3 Devices ")
-					: new ResourceStore<>(new DeviceParser(true, replace)).setTag("File Devices ");
+					? new S3ResourceStore<>(deviceParser, domain.managementData).setTag("S3 Devices ")
+					: new ResourceStore<>(deviceParser).setTag("File Devices ");
 			devices.loadAndCreateMonitor(deviceStore, deviceStorePw, interval > 0);
 			monitors.addOptionalMonitor(devices.getTag() + domainEntry.getKey(), interval, TimeUnit.SECONDS,
 					devices.getMonitor());
 			allDevices.put(domainEntry.getKey(), devices);
 		}
-		return new DomainDeviceManager(allDevices, privateKey, publicKey);
+		return new DomainDeviceManager(allDevices, credentials, addTimeout);
 	}
 
 	/**
@@ -345,6 +407,11 @@ public class Domains
 	}
 
 	@Override
+	public Set<String> getDomains() {
+		return domains.keySet();
+	}
+
+	@Override
 	public S3ProxyClient getProxyClient(String domainName) {
 		Domain domain = domains.get(domainName);
 		if (domain != null) {
@@ -365,6 +432,9 @@ public class Domains
 			Domain domain = domains.get(domainName);
 			if (domain != null) {
 				user = domain.userStore.getResource().get(userName);
+				if (user != null) {
+					return new WebAppDomainUser(domainName, user);
+				}
 			}
 		} else {
 			for (Entry<String, Domain> domain : domains.entrySet()) {
@@ -380,9 +450,9 @@ public class Domains
 					}
 				}
 			}
-		}
-		if (user != null) {
-			return new WebAppDomainUser(domainName, user);
+			if (user != null && domainName != null) {
+				return new WebAppDomainUser(domainName, user);
+			}
 		}
 		return null;
 	}
@@ -406,29 +476,25 @@ public class Domains
 	}
 
 	@Override
-	public URI getDestination(String domainName) {
+	public String remove(String domainName, String section, String name) {
 		Domain domain = domains.get(domainName);
 		if (domain != null) {
-			return domain.httpDestination;
+			return domain.configStore.getResource().remove(section, name);
 		}
 		return null;
 	}
 
 	@Override
-	public String getAuthentication(String domainName) {
-		Domain domain = domains.get(domainName);
+	public HttpForwardConfiguration getConfiguration(DomainPrincipalInfo principalInfo) {
+		if (DomainApplicationAnonymous.ANONYMOUS_INFO.equals(principalInfo)
+				|| DomainApplicationAnonymous.APPL_AUTH_INFO.equals(principalInfo)) {
+			return anonymousHttpForwardingConfiguration;
+		}
+		Domain domain = domains.get(principalInfo.domain);
 		if (domain != null) {
-			return domain.httpAuthentication;
+			return domain.httpForwardingConfiguration;
 		}
 		return null;
 	}
 
-	@Override
-	public DeviceIdentityMode getDeviceIdentityMode(String domainName) {
-		Domain domain = domains.get(domainName);
-		if (domain != null) {
-			return domain.deviceIdentityMode;
-		}
-		return null;
-	}
 }

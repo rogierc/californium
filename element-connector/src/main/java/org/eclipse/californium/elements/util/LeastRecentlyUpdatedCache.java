@@ -27,16 +27,17 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock.ReadLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
+import java.util.function.Predicate;
 
 /**
  * An in-memory cache with a maximum capacity and support for evicting stale
  * entries based on an LRU policy.
  * <p>
  * The cache keeps track of the value's last-update time. Every time a value is
- * updated or put to the store, the access-time is updated. In difference to
- * {@link LeastRecentlyUsedCache}, a read-access doesn't update this time. That
- * enables to use a {@link ReentrantReadWriteLock} with clear read and write
- * semantic. An update of last-update time on read access would mix that up.
+ * updated or put to the store, the access-time is updated. A read-access
+ * doesn't update this time. That enables to use a
+ * {@link ReentrantReadWriteLock} with clear read and write semantic. An update
+ * of last-update time on read access would mix that semantic up.
  * </p>
  * <p>
  * A value can be successfully added to the cache if any of the following
@@ -198,7 +199,7 @@ public class LeastRecentlyUpdatedCache<K, V> {
 	 * @param unit TimeUnit for threshold
 	 * @see #put(Object, Object)
 	 * @see #get(Object)
-	 * @see #find(Filter)
+	 * @see #find(Predicate)
 	 */
 	public final void setExpirationThreshold(long newThreshold, TimeUnit unit) {
 		this.expirationThresholdNanos = unit.toNanos(newThreshold);
@@ -695,74 +696,20 @@ public class LeastRecentlyUpdatedCache<K, V> {
 	 *         given predicate, or {@code null}, if no value matches
 	 * @since 3.10
 	 */
-	public V find(Filter<V> filter) {
+	public V find(Predicate<V> filter) {
 		if (filter != null) {
 			final Iterator<CacheEntry<K, V>> iterator = cache.values().iterator();
 			while (iterator.hasNext()) {
 				CacheEntry<K, V> entry = iterator.next();
 				if (!hideStaleValues || !entry.isStale(expirationThresholdNanos)) {
 					V value = entry.getValue();
-					if (filter.accept(value)) {
+					if (filter.test(value)) {
 						return value;
 					}
 				}
 			}
 		}
 		return null;
-	}
-
-	/**
-	 * Finds a value based on a predicate.
-	 * 
-	 * Since 3.9 the {@link #isHidingStaleValues()} is supported preventing
-	 * stale values from being found.
-	 * 
-	 * Returns the first matching value.
-	 * 
-	 * Acquires the read-lock.
-	 * 
-	 * @param predicate the condition to match. Assumed to match entries in a
-	 *            unique manner. Therefore stops on first match, even if that
-	 *            gets evicted on the read access.
-	 * @return the first value from the cache that matches according to the
-	 *         given predicate, or {@code null}, if no value matches
-	 * @deprecated use {@link #find(Filter)} instead
-	 */
-	@Deprecated
-	public final V find(Predicate<V> predicate) {
-		if (predicate != null) {
-			final Iterator<CacheEntry<K, V>> iterator = cache.values().iterator();
-			while (iterator.hasNext()) {
-				CacheEntry<K, V> entry = iterator.next();
-				if (!hideStaleValues || !entry.isStale(expirationThresholdNanos)) {
-					V value = entry.getValue();
-					if (predicate.accept(value)) {
-						return value;
-					}
-				}
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * A predicate to be applied to cache entries to determine the result set
-	 * when searching for particular values.
-	 *
-	 * @param <V> The type of value the predicate can be evaluated on.
-	 * @deprecated use {@link Filter} instead.
-	 */
-	@Deprecated
-	public static interface Predicate<V> {
-
-		/**
-		 * Applies the predicate to a cache value.
-		 * 
-		 * @param value The value to evaluate the predicate for.
-		 * @return {@code true} if the cache entry containing the value is part
-		 *         of the result set.
-		 */
-		boolean accept(V value);
 	}
 
 	/**
@@ -871,13 +818,7 @@ public class LeastRecentlyUpdatedCache<K, V> {
 
 				@Override
 				public final boolean contains(final Object o) {
-					return null != find(new Filter<V>() {
-
-						@Override
-						public boolean accept(final V value) {
-							return value.equals(o);
-						}
-					});
+					return null != find((value) -> value.equals(o));
 				}
 
 				@Override

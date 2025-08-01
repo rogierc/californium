@@ -24,26 +24,25 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 
 import org.eclipse.californium.core.Utils;
 import org.eclipse.californium.core.WebLink;
-import org.eclipse.californium.core.coap.BlockOption;
 import org.eclipse.californium.core.coap.CoAP;
 import org.eclipse.californium.core.coap.LinkFormat;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
 import org.eclipse.californium.core.coap.MessageObserverAdapter;
 import org.eclipse.californium.core.coap.Option;
-import org.eclipse.californium.core.coap.OptionNumberRegistry;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.coap.Token;
+import org.eclipse.californium.core.coap.option.BlockOption;
 import org.eclipse.californium.core.coap.option.OptionDefinition;
 import org.eclipse.californium.core.coap.option.StandardOptionRegistry;
 import org.eclipse.californium.core.coap.CoAP.Type;
 import org.eclipse.californium.core.coap.EndpointContextTracer;
 import org.eclipse.californium.core.network.Endpoint;
 import org.eclipse.californium.core.network.EndpointManager;
-import org.eclipse.californium.core.observe.NotificationListener;
 import org.eclipse.californium.elements.EndpointContext;
 import org.eclipse.californium.elements.util.StringUtil;
 
@@ -348,7 +347,7 @@ public abstract class TestClientAbstract {
 	 * Notification listener forwarding notifies as response. Backwards
 	 * compatibility to 1.0.0 notification implementation.
 	 */
-	protected class TestNotificationListener implements NotificationListener {
+	protected class TestNotificationListener implements BiConsumer<Request, Response> {
 
 		private Endpoint endpoint;
 
@@ -357,7 +356,7 @@ public abstract class TestClientAbstract {
 		}
 
 		@Override
-		public void onNotification(Request request, Response response) {
+		public void accept(Request request, Response response) {
 			Request origin = observe;
 			if (origin != null && origin.getToken().equals(response.getToken())) {
 				synchronized (notification) {
@@ -613,16 +612,14 @@ public abstract class TestClientAbstract {
 	 * @return true, if successful
 	 */
 	protected boolean hasEtag(Response response) {
-		// boolean success = response.hasOption(OptionNumberRegistry.ETAG);
-		boolean success = response.getOptions().getETagCount() > 0;
-
-		if (!success) {
+		byte[] etag = response.getOptions().getResponseEtag();
+		if (etag == null) {
 			System.out.println("FAIL: Response without Etag");
+			return false;
 		} else {
-			System.out.printf("PASS: Etag (%s)\n", Utils.toHexString(response.getOptions().getETags().get(0)));
+			System.out.printf("PASS: Etag (%s)\n", Utils.toHexString(etag));
+			return true;
 		}
-
-		return success;
 	}
 
 	/**
@@ -733,37 +730,6 @@ public abstract class TestClientAbstract {
 
 	protected boolean hasNoObserve(Response response) {
 		return hasOption(response, StandardOptionRegistry.OBSERVE, true);
-	}
-
-	@Deprecated
-	protected boolean hasOption(Response response, int optionNumber, boolean invert) {
-		String name = OptionNumberRegistry.toString(optionNumber);
-		List<Option> asSortedList = response.getOptions().asSortedList();
-		Option match = null;
-		for (Option option : asSortedList) {
-			if (option.getNumber() == optionNumber) {
-				match = option;
-				break;
-			}
-		}
-		// invert to check for not having the option
-		boolean success = match != null ^ invert;
-
-		StringBuilder result = new StringBuilder();
-		if (success) {
-			result.append("PASS: Response ");
-		} else {
-			result.append("FAIL: Response ");
-		}
-		if (match != null) {
-			result.append("with ");
-			result.append(name);
-		} else {
-			result.append("without ").append(name);
-		}
-		System.out.println(result);
-
-		return success;
 	}
 
 	protected boolean hasOption(Response response, OptionDefinition optionDefintion, boolean invert) {

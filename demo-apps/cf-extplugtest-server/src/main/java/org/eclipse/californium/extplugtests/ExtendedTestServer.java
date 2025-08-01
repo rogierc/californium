@@ -57,6 +57,7 @@ import org.eclipse.californium.core.observe.ObserveStatisticLogger;
 import org.eclipse.californium.core.server.resources.MyIpResource;
 import org.eclipse.californium.core.server.resources.Resource;
 import org.eclipse.californium.elements.Connector;
+import org.eclipse.californium.elements.config.CertificateAuthenticationMode;
 import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.config.Configuration.DefinitionsProvider;
 import org.eclipse.californium.elements.config.SystemConfig;
@@ -67,6 +68,7 @@ import org.eclipse.californium.elements.util.CounterStatisticManager;
 import org.eclipse.californium.elements.util.DatagramWriter;
 import org.eclipse.californium.elements.util.ExecutorsUtil;
 import org.eclipse.californium.elements.util.NamedThreadFactory;
+import org.eclipse.californium.elements.util.ProtocolScheduledExecutorService;
 import org.eclipse.californium.elements.util.SimpleCounterStatistic;
 import org.eclipse.californium.elements.util.SslContextUtil;
 import org.eclipse.californium.elements.util.StringUtil;
@@ -93,9 +95,9 @@ import org.eclipse.californium.scandium.config.DtlsClusterConnectorConfig;
 import org.eclipse.californium.scandium.config.DtlsConfig;
 import org.eclipse.californium.scandium.config.DtlsConnectorConfig;
 import org.eclipse.californium.scandium.dtls.cipher.CipherSuite;
-import org.eclipse.californium.scandium.dtls.pskstore.AsyncAdvancedPskStore;
+import org.eclipse.californium.scandium.dtls.pskstore.AsyncPskStore;
 import org.eclipse.californium.scandium.dtls.x509.AsyncKeyManagerCertificateProvider;
-import org.eclipse.californium.scandium.dtls.x509.AsyncNewAdvancedCertificateVerifier;
+import org.eclipse.californium.scandium.dtls.x509.AsyncCertificateVerifier;
 import org.eclipse.californium.scandium.util.SecretUtil;
 import org.eclipse.californium.unixhealth.NetSocketHealthLogger;
 import org.eclipse.californium.unixhealth.NetStatLogger;
@@ -131,47 +133,44 @@ public class ExtendedTestServer extends AbstractTestServer {
 	private static final int DEFAULT_BLOCK_SIZE = 1024;
 	private static final long MEGA = 1024 * 1024L;
 
-	private static DefinitionsProvider DEFAULTS = new DefinitionsProvider() {
-
-		@Override
-		public void applyDefinitions(Configuration config) {
-			// start on alternative port, 5783 and 5784
-			int processors = Runtime.getRuntime().availableProcessors();
-			config.set(DTLS_HANDSHAKE_RESULT_DELAY, 0, TimeUnit.MILLISECONDS);
-			config.set(CoapConfig.COAP_PORT, CoapConfig.COAP_PORT.getDefaultValue() + 100);
-			config.set(CoapConfig.COAP_SECURE_PORT, CoapConfig.COAP_SECURE_PORT.getDefaultValue() + 100);
-			config.set(CoapConfig.MAX_RESOURCE_BODY_SIZE, DEFAULT_MAX_RESOURCE_SIZE);
-			config.set(CoapConfig.MAX_MESSAGE_SIZE, DEFAULT_BLOCK_SIZE);
-			config.set(CoapConfig.PREFERRED_BLOCK_SIZE, DEFAULT_BLOCK_SIZE);
-			config.set(CoapConfig.PEERS_MARK_AND_SWEEP_MESSAGES, 16);
-			config.set(CoapConfig.DEDUPLICATOR, CoapConfig.DEDUPLICATOR_PEERS_MARK_AND_SWEEP);
-			config.set(CoapConfig.MAX_ACTIVE_PEERS, 1000000);
-			config.set(CoapConfig.MAX_PEER_INACTIVITY_PERIOD, 3, TimeUnit.MINUTES);
-			config.set(CoapConfig.RESPONSE_MATCHING, MatcherMode.PRINCIPAL_IDENTITY);
-			config.set(DtlsConfig.DTLS_MAX_CONNECTIONS, 1000000);
-			config.set(DtlsConfig.DTLS_STALE_CONNECTION_THRESHOLD, 3, TimeUnit.MINUTES);
-			config.set(DtlsConfig.DTLS_RECOMMENDED_CIPHER_SUITES_ONLY, false);
-			config.set(DtlsConfig.DTLS_AUTO_HANDSHAKE_TIMEOUT, null, TimeUnit.SECONDS);
-			config.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, 6);
-			config.set(DtlsConfig.DTLS_PRESELECTED_CIPHER_SUITES, PlugtestServer.PRESELECTED_CIPHER_SUITES);
-			config.set(DtlsConfig.DTLS_RECEIVE_BUFFER_SIZE, 1000000);
-			config.set(DtlsConfig.DTLS_RECEIVER_THREAD_COUNT, processors > 3 ? 2 : 1);
-			config.set(DtlsConfig.DTLS_REMOVE_STALE_DOUBLE_PRINCIPALS, true);
-			config.set(DtlsConfig.DTLS_MAC_ERROR_FILTER_QUIET_TIME, 4, TimeUnit.SECONDS);
-			config.set(DtlsConfig.DTLS_MAC_ERROR_FILTER_THRESHOLD, 8);
-			config.set(DtlsConfig.DTLS_RETRANSMISSION_TIMEOUT, 3, TimeUnit.SECONDS);
-			config.set(DtlsConfig.DTLS_ADDITIONAL_ECC_TIMEOUT, 8, TimeUnit.SECONDS);
-			config.set(TcpConfig.TCP_CONNECT_TIMEOUT, 15, TimeUnit.SECONDS);
-			config.set(TcpConfig.TCP_CONNECTION_IDLE_TIMEOUT, 60, TimeUnit.MINUTES);
-			config.set(TcpConfig.TLS_HANDSHAKE_TIMEOUT, 60, TimeUnit.SECONDS);
-			config.set(SystemConfig.HEALTH_STATUS_INTERVAL, 60, TimeUnit.SECONDS);
-			config.set(UdpConfig.UDP_RECEIVER_THREAD_COUNT, processors > 3 ? 2 : 1);
-			config.set(UdpConfig.UDP_SENDER_THREAD_COUNT, processors > 3 ? processors : 2);
-			config.set(EXTERNAL_UDP_MAX_MESSAGE_SIZE, 64);
-			config.set(EXTERNAL_UDP_PREFERRED_BLOCK_SIZE, 64);
-			config.set(UDP_DROPS_READ_INTERVAL, 2000, TimeUnit.MILLISECONDS);
-		}
-
+	private static DefinitionsProvider DEFAULTS = (config) -> {
+		// start on alternative port, 5783 and 5784
+		int processors = Runtime.getRuntime().availableProcessors();
+		config.set(DTLS_HANDSHAKE_RESULT_DELAY, 0, TimeUnit.MILLISECONDS);
+		config.set(CoapConfig.COAP_PORT, CoapConfig.COAP_PORT.getDefaultValue() + 100);
+		config.set(CoapConfig.COAP_SECURE_PORT, CoapConfig.COAP_SECURE_PORT.getDefaultValue() + 100);
+		config.set(CoapConfig.MAX_RESOURCE_BODY_SIZE, DEFAULT_MAX_RESOURCE_SIZE);
+		config.set(CoapConfig.MAX_MESSAGE_SIZE, DEFAULT_BLOCK_SIZE);
+		config.set(CoapConfig.PREFERRED_BLOCK_SIZE, DEFAULT_BLOCK_SIZE);
+		config.set(CoapConfig.PEERS_MARK_AND_SWEEP_MESSAGES, 16);
+		config.set(CoapConfig.DEDUPLICATOR, CoapConfig.DEDUPLICATOR_PEERS_MARK_AND_SWEEP);
+		config.set(CoapConfig.MAX_ACTIVE_PEERS, 1000000);
+		config.set(CoapConfig.MAX_PEER_INACTIVITY_PERIOD, 3, TimeUnit.MINUTES);
+		config.set(CoapConfig.RESPONSE_MATCHING, MatcherMode.PRINCIPAL_IDENTITY);
+		config.set(DtlsConfig.DTLS_MAX_CONNECTIONS, 1000000);
+		config.set(DtlsConfig.DTLS_STALE_CONNECTION_THRESHOLD, 3, TimeUnit.MINUTES);
+		config.set(DtlsConfig.DTLS_RECOMMENDED_CIPHER_SUITES_ONLY, false);
+		config.set(DtlsConfig.DTLS_AUTO_HANDSHAKE_TIMEOUT, null, TimeUnit.SECONDS);
+		config.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, 6);
+		config.set(DtlsConfig.DTLS_PRESELECTED_CIPHER_SUITES, PlugtestServer.PRESELECTED_CIPHER_SUITES);
+		config.set(DtlsConfig.DTLS_RECEIVE_BUFFER_SIZE, 1000000);
+		config.set(DtlsConfig.DTLS_RECEIVER_THREAD_COUNT, processors > 3 ? 2 : 1);
+		config.set(DtlsConfig.DTLS_REMOVE_STALE_DOUBLE_PRINCIPALS, true);
+		config.set(DtlsConfig.DTLS_MAC_ERROR_FILTER_QUIET_TIME, 4, TimeUnit.SECONDS);
+		config.set(DtlsConfig.DTLS_MAC_ERROR_FILTER_THRESHOLD, 8);
+		config.set(DtlsConfig.DTLS_RETRANSMISSION_TIMEOUT, 3, TimeUnit.SECONDS);
+		config.set(DtlsConfig.DTLS_ADDITIONAL_ECC_TIMEOUT, 8, TimeUnit.SECONDS);
+		config.set(DtlsConfig.DTLS_CLIENT_AUTHENTICATION_MODE, CertificateAuthenticationMode.WANTED);
+		config.set(DtlsConfig.DTLS_APPLICATION_AUTHORIZATION_TIMEOUT, 15, TimeUnit.SECONDS);
+		config.set(TcpConfig.TCP_CONNECT_TIMEOUT, 15, TimeUnit.SECONDS);
+		config.set(TcpConfig.TCP_CONNECTION_IDLE_TIMEOUT, 60, TimeUnit.MINUTES);
+		config.set(TcpConfig.TLS_HANDSHAKE_TIMEOUT, 60, TimeUnit.SECONDS);
+		config.set(SystemConfig.HEALTH_STATUS_INTERVAL, 60, TimeUnit.SECONDS);
+		config.set(UdpConfig.UDP_RECEIVER_THREAD_COUNT, processors > 3 ? 2 : 1);
+		config.set(UdpConfig.UDP_SENDER_THREAD_COUNT, processors > 3 ? processors : 2);
+		config.set(EXTERNAL_UDP_MAX_MESSAGE_SIZE, 64);
+		config.set(EXTERNAL_UDP_PREFERRED_BLOCK_SIZE, 64);
+		config.set(UDP_DROPS_READ_INTERVAL, 2000, TimeUnit.MILLISECONDS);
 	};
 
 	@Command(name = "ExtendedTestServer", version = "(c) 2017-2020, Bosch.IO GmbH and others.")
@@ -376,11 +375,9 @@ public class ExtendedTestServer extends AbstractTestServer {
 
 			// create server
 
-			ScheduledExecutorService executor = ExecutorsUtil.newScheduledThreadPool(//
+			ProtocolScheduledExecutorService executor = ExecutorsUtil.newProtocolScheduledThreadPool(//
 					configuration.get(CoapConfig.PROTOCOL_STAGE_THREAD_COUNT), //
-					new NamedThreadFactory("ExtCoapServer(main)#")); //$NON-NLS-1$
-			ScheduledExecutorService secondaryExecutor = ExecutorsUtil
-					.newDefaultSecondaryScheduler("ExtCoapServer(secondary)#");
+					new NamedThreadFactory("ExtCoapServer#")); //$NON-NLS-1$
 
 			long notifyIntervalMillis = config.getNotifyIntervalMillis();
 
@@ -388,7 +385,7 @@ public class ExtendedTestServer extends AbstractTestServer {
 					notifyIntervalMillis);
 			server.setVersion(PlugtestServer.CALIFORNIUM_BUILD_VERSION);
 			server.setTag("EXTENDED-TEST");
-			server.setExecutors(executor, secondaryExecutor, false);
+			server.setExecutor(executor, false);
 			server.add(new Echo(configuration, config.echoDelay ? executor : null));
 			if (config.diagnose) {
 				server.add(new Diagnose(server));
@@ -398,7 +395,7 @@ public class ExtendedTestServer extends AbstractTestServer {
 			server.add(reverseObserver);
 			if (k8sGroup != null) {
 				DtlsClusterConnectorConfig clusterConfig = clusterConfigBuilder.build();
-				server.addClusterEndpoint(secondaryExecutor, config.cluster.clusterType.k8sCluster.dtls,
+				server.addClusterEndpoint(executor.getBackgroundExecutor(), config.cluster.clusterType.k8sCluster.dtls,
 						k8sGroup.getNodeID(), clusterConfig, null, k8sGroup, config);
 			} else if (config.cluster != null && config.cluster.clusterType.simpleCluster != null) {
 				ClusterGroup group = null;
@@ -430,7 +427,7 @@ public class ExtendedTestServer extends AbstractTestServer {
 						if (config.cluster.clusterType.simpleCluster.dtlsClusterGroup != null) {
 							group = new ClusterGroup(config.cluster.clusterType.simpleCluster.dtlsClusterGroup);
 						}
-						server.addClusterEndpoint(secondaryExecutor, cluster.dtls, cluster.nodeId, clusterConfig, nodes,
+						server.addClusterEndpoint(executor.getBackgroundExecutor(), cluster.dtls, cluster.nodeId, clusterConfig, nodes,
 								group, config);
 					}
 				}
@@ -450,13 +447,7 @@ public class ExtendedTestServer extends AbstractTestServer {
 				server.add(socketLogger);
 				long readInterval = configuration.get(UDP_DROPS_READ_INTERVAL, TimeUnit.MILLISECONDS);
 				if (interval > readInterval) {
-					secondaryExecutor.scheduleAtFixedRate(new Runnable() {
-
-						@Override
-						public void run() {
-							socketLogger.read();
-						}
-					}, readInterval, readInterval, TimeUnit.MILLISECONDS);
+					executor.scheduleBackgroundAtFixedRate(()-> socketLogger.read(), readInterval, readInterval, TimeUnit.MILLISECONDS);
 				}
 				socketObserver = new EndpointNetSocketObserver(socketLogger);
 				server.addDefaultEndpointObserver(socketObserver);
@@ -525,10 +516,10 @@ public class ExtendedTestServer extends AbstractTestServer {
 			}
 
 			PlugtestServer.add(server);
-			PlugtestServer.load(config);
+			PlugtestServer.setupPersistence(config);
 
 			// start standard plugtest server and shutdown
-			CoapServer plugtestServer = PlugtestServer.start(executor, secondaryExecutor, config, configuration,
+			CoapServer plugtestServer = PlugtestServer.start(executor, config, configuration,
 					socketObserver, null);
 			server.start();
 
@@ -603,9 +594,8 @@ public class ExtendedTestServer extends AbstractTestServer {
 						client.restoreSingle(k8sClient, httpsRestoreOther.getPort(), clientContext, server);
 					}
 				} else {
-					String host = StringUtil.toHostString(httpsRestoreOther);
-					client.restore(InetAddress.getLocalHost().getHostName(), host, httpsRestoreOther.getPort(),
-							clientContext, server);
+					client.restore(InetAddress.getLocalHost().getHostName(), httpsRestoreOther.getHostString(),
+							httpsRestoreOther.getPort(), clientContext, server);
 				}
 			}
 			if (!config.benchmark) {
@@ -657,7 +647,7 @@ public class ExtendedTestServer extends AbstractTestServer {
 			PlugtestServer.shutdown();
 			server.stop();
 			LOGGER.info("Executor shutdown ...");
-			ExecutorsUtil.shutdownExecutorGracefully(500, executor, secondaryExecutor);
+			ExecutorsUtil.shutdownExecutorGracefully(500, executor);
 			PlugtestServer.exit();
 			LOGGER.info("Exit ...");
 		} catch (Exception e) {
@@ -724,9 +714,9 @@ public class ExtendedTestServer extends AbstractTestServer {
 			if (cliConfig.pskFile != null) {
 				pskStore.loadPskCredentials(cliConfig.pskFile);
 			}
-			AsyncAdvancedPskStore asyncPskStore = new AsyncAdvancedPskStore(pskStore);
+			AsyncPskStore asyncPskStore = new AsyncPskStore(pskStore);
 			asyncPskStore.setDelay(handshakeResultDelayMillis);
-			dtlsConfigBuilder.setAdvancedPskStore(asyncPskStore);
+			dtlsConfigBuilder.setPskStore(asyncPskStore);
 		}
 		if (certificate) {
 			if (cliConfig.clientAuth != null) {
@@ -737,16 +727,16 @@ public class ExtendedTestServer extends AbstractTestServer {
 					configuration.get(DtlsConfig.DTLS_CERTIFICATE_TYPES));
 			certificateProvider.setDelay(handshakeResultDelayMillis);
 			dtlsConfigBuilder.setCertificateIdentityProvider(certificateProvider);
-			AsyncNewAdvancedCertificateVerifier.Builder verifierBuilder = AsyncNewAdvancedCertificateVerifier.builder();
+			AsyncCertificateVerifier.Builder verifierBuilder = AsyncCertificateVerifier.builder();
 			if (cliConfig.trustall) {
 				verifierBuilder.setTrustAllCertificates();
 			} else {
 				verifierBuilder.setTrustedCertificates(trustedCertificates);
 			}
 			verifierBuilder.setTrustAllRPKs();
-			AsyncNewAdvancedCertificateVerifier verifier = verifierBuilder.build();
+			AsyncCertificateVerifier verifier = verifierBuilder.build();
 			verifier.setDelay(handshakeResultDelayMillis);
-			dtlsConfigBuilder.setAdvancedCertificateVerifier(verifier);
+			dtlsConfigBuilder.setCertificateVerifier(verifier);
 		}
 		if (healthStatusIntervalMillis > 0) {
 			DtlsClusterHealthLogger health = new DtlsClusterHealthLogger(tag);
@@ -828,9 +818,9 @@ public class ExtendedTestServer extends AbstractTestServer {
 			if (cliConfig.pskFile != null) {
 				pskStore.loadPskCredentials(cliConfig.pskFile);
 			}
-			AsyncAdvancedPskStore asyncPskStore = new AsyncAdvancedPskStore(pskStore);
+			AsyncPskStore asyncPskStore = new AsyncPskStore(pskStore);
 			asyncPskStore.setDelay(handshakeResultDelayMillis);
-			dtlsConfigBuilder.setAdvancedPskStore(asyncPskStore);
+			dtlsConfigBuilder.setPskStore(asyncPskStore);
 		}
 		if (certificate) {
 			if (cliConfig.clientAuth != null) {
@@ -841,16 +831,16 @@ public class ExtendedTestServer extends AbstractTestServer {
 					configuration.get(DtlsConfig.DTLS_CERTIFICATE_TYPES));
 			certificateProvider.setDelay(handshakeResultDelayMillis);
 			dtlsConfigBuilder.setCertificateIdentityProvider(certificateProvider);
-			AsyncNewAdvancedCertificateVerifier.Builder verifierBuilder = AsyncNewAdvancedCertificateVerifier.builder();
+			AsyncCertificateVerifier.Builder verifierBuilder = AsyncCertificateVerifier.builder();
 			if (cliConfig.trustall) {
 				verifierBuilder.setTrustAllCertificates();
 			} else {
 				verifierBuilder.setTrustedCertificates(trustedCertificates);
 			}
 			verifierBuilder.setTrustAllRPKs();
-			AsyncNewAdvancedCertificateVerifier verifier = verifierBuilder.build();
+			AsyncCertificateVerifier verifier = verifierBuilder.build();
 			verifier.setDelay(handshakeResultDelayMillis);
-			dtlsConfigBuilder.setAdvancedCertificateVerifier(verifier);
+			dtlsConfigBuilder.setCertificateVerifier(verifier);
 		}
 		if (healthStatusIntervalMillis > 0) {
 			DtlsHealthLogger health = new DtlsHealthLogger(tag);

@@ -21,7 +21,6 @@ import static org.junit.Assume.assumeFalse;
 
 import java.net.Inet6Address;
 import java.net.InetAddress;
-import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
@@ -104,12 +103,10 @@ public class StringUtilTest {
 		StringUtil.base64ToByteArray(line);
 	}
 
-	@Test
+	@Test(expected = IllegalArgumentException.class)
 	public void testBase64String2ByteArrayIllegalCharacter() {
 		String line = "QTABC\u0100";
-		byte[] result = StringUtil.base64ToByteArray(line);
-		// will change with next major release to IllegalArgumentException
-		assertThat(result, is(Bytes.EMPTY));
+		StringUtil.base64ToByteArray(line);
 	}
 
 	@Test
@@ -176,19 +173,6 @@ public class StringUtilTest {
 
 		URI test = new URI("coap", null, hostname, 5683, null, null, null);
 		assertThat(test.toASCIIString(), is("coap://[ff02:0:0:0:0:0:0:fd%25" + scope + "]:5683"));
-	}
-
-	@Test
-	public void testToHostString() throws URISyntaxException, UnknownHostException {
-		InetSocketAddress address = new InetSocketAddress("localhost", 5683);
-		assertThat(StringUtil.toHostString(address), is("localhost"));
-		address = new InetSocketAddress("127.0.0.1", 5683);
-		assertThat(StringUtil.toHostString(address), is("127.0.0.1"));
-		address = InetSocketAddress.createUnresolved("my.test.server", 5683);
-		assertThat(StringUtil.toHostString(address), is("my.test.server"));
-		InetAddress dest = InetAddress.getByAddress(new byte[] { 8, 8, 8, 8 });
-		address = new InetSocketAddress(dest, 5683);
-		assertThat(StringUtil.toHostString(address), is("8.8.8.8"));
 	}
 
 	@Test

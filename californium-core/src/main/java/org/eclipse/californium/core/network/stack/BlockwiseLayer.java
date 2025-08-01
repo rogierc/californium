@@ -68,7 +68,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
 
-import org.eclipse.californium.core.coap.BlockOption;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.coap.CoAP.Type;
 import org.eclipse.californium.core.config.CoapConfig;
@@ -76,6 +75,8 @@ import org.eclipse.californium.core.coap.Message;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.coap.Token;
+import org.eclipse.californium.core.coap.option.BlockOption;
+import org.eclipse.californium.core.coap.option.StandardOptionRegistry;
 import org.eclipse.californium.core.network.Exchange;
 import org.eclipse.californium.core.server.resources.Resource;
 import org.eclipse.californium.elements.EndpointContext;
@@ -209,7 +210,7 @@ public class BlockwiseLayer extends AbstractLayer {
 
 		@Override
 		public void remove(BlockwiseStatus status) {
-			clearBlock1Status((Block1BlockwiseStatus)status);
+			clearBlock1Status((Block1BlockwiseStatus) status);
 		}
 
 	};
@@ -217,7 +218,7 @@ public class BlockwiseLayer extends AbstractLayer {
 
 		@Override
 		public void remove(BlockwiseStatus status) {
-			clearBlock2Status((Block2BlockwiseStatus)status);
+			clearBlock2Status((Block2BlockwiseStatus) status);
 		}
 
 	};
@@ -254,56 +255,6 @@ public class BlockwiseLayer extends AbstractLayer {
 	private final boolean enableAutoFailoverOn413;
 
 	private final EndpointContextMatcher matchingStrategy;
-
-	/**
-	 * Creates a new blockwise layer for a configuration.
-	 * <p>
-	 * The following configuration properties are used:
-	 * <ul>
-	 * <li>{@link CoapConfig#MAX_MESSAGE_SIZE} - This value is used as the
-	 * threshold for determining whether an inbound or outbound message's body
-	 * needs to be transferred blockwise. If not set, a default value of 4096
-	 * bytes is used.</li>
-	 * 
-	 * <li>{@link CoapConfig#PREFERRED_BLOCK_SIZE} - This value is used as the
-	 * value proposed to a peer when doing a transparent blockwise transfer. The
-	 * value indicates the number of bytes, not the szx code. If not set, a
-	 * default value of 1024 bytes is used.</li>
-	 * 
-	 * <li>{@link CoapConfig#MAX_RESOURCE_BODY_SIZE} - This value (in bytes) is
-	 * used as the upper limit for the size of the buffer used for assembling
-	 * blocks of a transparent blockwise transfer. Resource bodies larger than
-	 * this value can only be transferred in a manually managed blockwise
-	 * transfer. Setting this value to 0 disables transparent blockwise handling
-	 * altogether, i.e. all messages will simply be forwarded directly up and
-	 * down to the next layer. If not set, a default value of 8192 bytes is
-	 * used.</li>
-	 * 
-	 * <li>{@link CoapConfig#BLOCKWISE_STATUS_LIFETIME} - The maximum amount of
-	 * time (in milliseconds) allowed between transfers of individual blocks
-	 * before the blockwise transfer state is discarded. If not set, a default
-	 * value of 30 seconds is used.</li>
-	 * 
-	 * <li>{@link CoapConfig#BLOCKWISE_STRICT_BLOCK2_OPTION} - This value is
-	 * used to indicate if the response should always include the Block2 option
-	 * when client request early blockwise negociation but the response can be
-	 * sent on one packet.</li>
-	 * </ul>
-	 * 
-	 * @param tag logging tag
-	 * @param enableBert {@code true}, enable TCP/BERT support, if the
-	 *            configured value for
-	 *            {@link CoapConfig#TCP_NUMBER_OF_BULK_BLOCKS} is larger than
-	 *            {@code 1}. {@code false} disable it.
-	 * @param config The configuration values to use.
-	 * @deprecated use
-	 *             {@link BlockwiseLayer#BlockwiseLayer(String, boolean, Configuration, EndpointContextMatcher)}
-	 *             instead
-	 * @since 3.0 (logging tag added and changed parameter to Configuration)
-	 */
-	public BlockwiseLayer(String tag, boolean enableBert, Configuration config) {
-		this(tag, enableBert, config, null);
-	}
 
 	/**
 	 * Creates a new blockwise layer for a configuration.
@@ -408,7 +359,7 @@ public class BlockwiseLayer extends AbstractLayer {
 	@Override
 	public void start() {
 		if (healthStatusInterval > 0 && HEALTH_LOGGER.isDebugEnabled() && statusLogger == null) {
-			statusLogger = secondaryExecutor.scheduleAtFixedRate(new Runnable() {
+			statusLogger = executor.scheduleBackgroundAtFixedRate(new Runnable() {
 
 				@Override
 				public void run() {
@@ -443,13 +394,8 @@ public class BlockwiseLayer extends AbstractLayer {
 				}
 			}, healthStatusInterval, healthStatusInterval, TimeUnit.MILLISECONDS);
 		}
-		cleanup = secondaryExecutor.scheduleAtFixedRate(new Runnable() {
-
-			@Override
-			public void run() {
-				cleanupExpiredBlockStatus(false);
-			}
-		}, blockInterval, blockInterval, TimeUnit.MILLISECONDS);
+		cleanup = executor.scheduleBackgroundAtFixedRate(() -> cleanupExpiredBlockStatus(false), blockInterval,
+				blockInterval, TimeUnit.MILLISECONDS);
 	}
 
 	@Override
@@ -760,7 +706,7 @@ public class BlockwiseLayer extends AbstractLayer {
 				if (requestBlock2 != null) {
 					block2 = getLimitedBlockOption(requestBlock2);
 				} else {
-					block2 = new BlockOption(preferredBlockSzx, false, 0);
+					block2 = StandardOptionRegistry.BLOCK2.create(preferredBlockSzx, false, 0);
 				}
 				responseToSend = status.getNextResponseBlock(block2);
 				responseToSend.setDestinationContext(destinationContext);
@@ -1526,8 +1472,8 @@ public class BlockwiseLayer extends AbstractLayer {
 			lock.unlock();
 		}
 		if (size != null) {
-			LOGGER.debug("{}created tracker for inbound block2 transfer {}, transfers in progress: {}, {}", tag, 
-					status, size, response);
+			LOGGER.debug("{}created tracker for inbound block2 transfer {}, transfers in progress: {}, {}", tag, status,
+					size, response);
 		}
 		return status;
 	}
@@ -1679,7 +1625,7 @@ public class BlockwiseLayer extends AbstractLayer {
 				throw new IllegalStateException(
 						"Block offset " + offset + " doesn't align with preferred blocksize " + size + "!");
 			}
-			return new BlockOption(preferredBlockSzx, block.isM(), offset / size);
+			return block.getDefinition().create(preferredBlockSzx, block.isM(), offset / size);
 		} else {
 			return block;
 		}

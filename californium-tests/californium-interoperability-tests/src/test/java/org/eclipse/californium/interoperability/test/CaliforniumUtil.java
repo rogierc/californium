@@ -22,6 +22,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.util.Arrays;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -29,6 +30,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.californium.core.CoapClient;
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.CoapResponse;
 import org.eclipse.californium.core.CoapServer;
@@ -39,16 +41,14 @@ import org.eclipse.californium.core.coap.Option;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.coap.option.MapBasedOptionRegistry;
-import org.eclipse.californium.core.coap.option.OpaqueOptionDefinition;
+import org.eclipse.californium.core.coap.option.OpaqueOption;
 import org.eclipse.californium.core.coap.option.StandardOptionRegistry;
 import org.eclipse.californium.core.network.CoapEndpoint;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.elements.DtlsEndpointContext;
 import org.eclipse.californium.elements.EndpointContext;
 import org.eclipse.californium.elements.MapBasedEndpointContext;
 import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.exception.ConnectorException;
-import org.eclipse.californium.elements.util.StandardCharsets;
 import org.eclipse.californium.scandium.config.DtlsConnectorConfig;
 import org.eclipse.californium.scandium.dtls.cipher.CipherSuite;
 
@@ -65,7 +65,7 @@ public class CaliforniumUtil extends ConnectorUtil {
 
 	public static final int OPTION_TRACE_CONTEXT_NO = 0b1111110111111110; // 65022
 
-	public static final OpaqueOptionDefinition OPTION_TRACE_CONTEXT = new OpaqueOptionDefinition(OPTION_TRACE_CONTEXT_NO, "Trace_Context", true, 1, 128);
+	public static final OpaqueOption.Definition OPTION_TRACE_CONTEXT = new OpaqueOption.Definition(OPTION_TRACE_CONTEXT_NO, "Trace_Context", true, 1, 128);
 
 	/**
 	 * {@code true}, if used as client, {@code false}, otherwise.
@@ -194,13 +194,12 @@ public class CaliforniumUtil extends ConnectorUtil {
 				@Override
 				public void handlePOST(CoapExchange exchange) {
 					addReceivedExchange(exchange);
+					checkContentFormat(exchange, MediaTypeRegistry.MAX_TYPE - 10);
 					Response response = new Response(ResponseCode.CHANGED);
 					response.setPayload("Custom Greetings!");
 					response.getOptions().setContentFormat(MediaTypeRegistry.MAX_TYPE - 10);
-					Option custom = OPTION_TRACE_CONTEXT.create(new byte[] { 0x1 });
-					custom.setStringValue("test");
+					Option custom = OPTION_TRACE_CONTEXT.create("test".getBytes());
 					response.getOptions().addOption(custom);
-					response.getOptions().setContentFormat(MediaTypeRegistry.MAX_TYPE - 10);
 					exchange.respond(response);
 				}
 			});
@@ -209,6 +208,7 @@ public class CaliforniumUtil extends ConnectorUtil {
 				@Override
 				public void handlePOST(CoapExchange exchange) {
 					addReceivedExchange(exchange);
+					checkContentFormat(exchange, MediaTypeRegistry.TEXT_PLAIN);
 					Response response = new Response(ResponseCode.CHANGED);
 					response.getOptions().setLocationPath("/command/1234-abcde");
 					response.getOptions().setLocationQuery("hono-command=blink");

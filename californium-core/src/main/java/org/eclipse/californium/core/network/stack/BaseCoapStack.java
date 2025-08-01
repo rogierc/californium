@@ -28,18 +28,18 @@
 package org.eclipse.californium.core.network.stack;
 
 import java.util.List;
-import java.util.concurrent.ScheduledExecutorService;
 
-import org.eclipse.californium.core.coap.BlockOption;
 import org.eclipse.californium.core.coap.EmptyMessage;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
+import org.eclipse.californium.core.coap.option.BlockOption;
 import org.eclipse.californium.core.network.Exchange;
 import org.eclipse.californium.core.network.ExchangeCompleteException;
 import org.eclipse.californium.core.network.Outbox;
 import org.eclipse.californium.core.network.stack.Layer.TopDownBuilder;
 import org.eclipse.californium.core.observe.ObservationStoreException;
 import org.eclipse.californium.core.server.MessageDeliverer;
+import org.eclipse.californium.elements.util.ProtocolScheduledExecutorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -47,7 +47,7 @@ import org.slf4j.LoggerFactory;
  * The BaseCoapStack passes the messages through the layers configured in the
  * stacks implementations.
  */
-public abstract class BaseCoapStack implements CoapStack, ExtendedCoapStack {
+public abstract class BaseCoapStack implements CoapStack {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(BaseCoapStack.class);
 
@@ -139,9 +139,9 @@ public abstract class BaseCoapStack implements CoapStack, ExtendedCoapStack {
 	}
 
 	@Override
-	public final void setExecutors(ScheduledExecutorService mainExecutor, ScheduledExecutorService secondaryExecutor) {
+	public final void setExecutor(ProtocolScheduledExecutorService executor) {
 		for (Layer layer : layers) {
-			layer.setExecutors(mainExecutor, secondaryExecutor);
+			layer.setExecutor(executor);
 		}
 	}
 

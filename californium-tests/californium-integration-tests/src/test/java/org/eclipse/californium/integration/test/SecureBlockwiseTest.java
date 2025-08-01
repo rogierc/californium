@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.californium.TestTools;
 import org.eclipse.californium.core.CoapClient;
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.CoapResponse;
 import org.eclipse.californium.core.CoapServer;
@@ -36,7 +37,6 @@ import org.eclipse.californium.core.coap.MediaTypeRegistry;
 import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.network.CoapEndpoint;
 import org.eclipse.californium.core.network.EndpointManager;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.elements.category.Medium;
 import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.rule.TestNameLoggerRule;
@@ -45,8 +45,8 @@ import org.eclipse.californium.rule.CoapThreadsRule;
 import org.eclipse.californium.scandium.DTLSConnector;
 import org.eclipse.californium.scandium.config.DtlsConfig;
 import org.eclipse.californium.scandium.config.DtlsConnectorConfig;
-import org.eclipse.californium.scandium.dtls.pskstore.AdvancedPskStore;
-import org.eclipse.californium.scandium.dtls.pskstore.AdvancedSinglePskStore;
+import org.eclipse.californium.scandium.dtls.pskstore.PskStore;
+import org.eclipse.californium.scandium.dtls.pskstore.SinglePskStore;
 import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.Rule;
@@ -123,7 +123,7 @@ public class SecureBlockwiseTest {
 	}
 
 	private void createSecureServer(MatcherMode mode) {
-		AdvancedPskStore pskStore = new AdvancedSinglePskStore(IDENITITY, KEY.getBytes());
+		PskStore pskStore = new SinglePskStore(IDENITITY, KEY.getBytes());
 		Configuration configuration = network.createTestConfig()
 				// retransmit constantly all 200 milliseconds
 				.set(CoapConfig.ACK_TIMEOUT, 200, TimeUnit.MILLISECONDS)
@@ -140,7 +140,7 @@ public class SecureBlockwiseTest {
 		DtlsConnectorConfig dtlsConfig = DtlsConnectorConfig.builder(configuration)
 				.setAddress(TestTools.LOCALHOST_EPHEMERAL)
 				.setLoggingTag("server")
-				.setAdvancedPskStore(pskStore).build();
+				.setPskStore(pskStore).build();
 
 		DTLSConnector serverConnector = new DTLSConnector(dtlsConfig);
 		CoapEndpoint.Builder builder = new CoapEndpoint.Builder();
@@ -161,12 +161,13 @@ public class SecureBlockwiseTest {
 		DtlsConnectorConfig clientdtlsConfig = DtlsConnectorConfig.builder(configuration)
 				.setAddress(TestTools.LOCALHOST_EPHEMERAL)
 				.setLoggingTag("client")
-				.setAdvancedPskStore(pskStore).build();
+				.setPskStore(pskStore).build();
 		DTLSConnector clientConnector = new DTLSConnector(clientdtlsConfig);
 		builder = new CoapEndpoint.Builder();
 		builder.setConnector(clientConnector);
 		builder.setConfiguration(configuration);
 		EndpointManager.getEndpointManager().setDefaultEndpoint(builder.build());
+		cleanup.add(() -> EndpointManager.reset());
 	}
 
 	private static String createRandomPayload(int size) {

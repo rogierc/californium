@@ -15,7 +15,6 @@
  ******************************************************************************/
 package org.eclipse.californium.core.test;
 
-import static org.eclipse.californium.elements.util.TestConditionTools.inRange;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
@@ -26,6 +25,7 @@ import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.californium.core.CoapClient;
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapObserveRelation;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.CoapResponse;
@@ -34,9 +34,9 @@ import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.config.CoapConfig;
 import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.network.CoapEndpoint;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.elements.category.Medium;
 import org.eclipse.californium.elements.config.Configuration;
+import org.eclipse.californium.elements.matcher.InRange;
 import org.eclipse.californium.elements.rule.TestNameLoggerRule;
 import org.eclipse.californium.elements.util.ExpectedExceptionWrapper;
 import org.eclipse.californium.elements.util.TestScope;
@@ -173,7 +173,7 @@ public class NotificationReregistrationBackoffTest {
 		assertTrue("cancel times out", handler.waitOnLoadCalls(5, 2000, TimeUnit.MILLISECONDS));
 
 		assertTrue("wrong number of responses/notifications", ready);
-		assertThat("timespan not in expected range", time, is(inRange(expectedTimespanMillis - 100L, expectedTimespanMillis + 200L)));
+		assertThat("timespan not in expected range", time, is(InRange.inRange(expectedTimespanMillis - 100L, expectedTimespanMillis + 200L)));
 
 		for (int index = 0; index < 5; ++index) {
 			CoapResponse response = handler.waitOnLoad(0);

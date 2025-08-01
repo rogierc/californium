@@ -20,15 +20,19 @@ import java.io.UnsupportedEncodingException;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.MessageDigest;
+import java.security.Principal;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
@@ -38,15 +42,21 @@ import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 
 import org.eclipse.californium.cloud.http.HttpService;
+import org.eclipse.californium.cloud.s3.proxy.S3ProxyClient;
+import org.eclipse.californium.cloud.s3.util.DomainPrincipalInfo;
+import org.eclipse.californium.cloud.s3.util.DomainPrincipalInfoProvider;
 import org.eclipse.californium.cloud.s3.util.DomainNamePair;
 import org.eclipse.californium.cloud.s3.util.WebAppDomainUser;
 import org.eclipse.californium.cloud.s3.util.WebAppUser;
 import org.eclipse.californium.cloud.s3.util.WebAppUserProvider;
+import org.eclipse.californium.cloud.util.PrincipalInfo.Type;
+import org.eclipse.californium.cloud.util.PrincipalInfo;
+import org.eclipse.californium.elements.auth.AdditionalInfo;
+import org.eclipse.californium.elements.auth.ExtensiblePrincipal;
 import org.eclipse.californium.elements.util.Bytes;
 import org.eclipse.californium.elements.util.ClockUtil;
 import org.eclipse.californium.elements.util.LeastRecentlyUpdatedCache;
 import org.eclipse.californium.elements.util.LeastRecentlyUpdatedCache.Timestamped;
-import org.eclipse.californium.elements.util.StandardCharsets;
 import org.eclipse.californium.elements.util.StringUtil;
 import org.eclipse.californium.scandium.dtls.cipher.ThreadLocalMac;
 import org.eclipse.californium.scandium.dtls.cipher.ThreadLocalMessageDigest;
@@ -128,10 +138,24 @@ public class Aws4Authorizer {
 		}
 	}
 
+	private static final DomainPrincipalInfoProvider webPrincipalInfoProvider = new DomainPrincipalInfoProvider() {
+
+		@Override
+		public DomainPrincipalInfo getPrincipalInfo(Principal principal) {
+			if (principal instanceof WebAppAuthorization) {
+				WebAppAuthorization authorization = (WebAppAuthorization) principal;
+				List<String> groups = authorization.getWebAppUser().groups;
+				String group = groups.isEmpty() ? "web" : groups.get(0);
+				return new DomainPrincipalInfo(authorization.getDomain(), group, authorization.getName(), Type.WEB);
+			}
+			return null;
+		}
+	};
+
 	/**
 	 * Web application authorization.
 	 */
-	public static class Authorization {
+	public static class Authorization implements Principal {
 
 		/**
 		 * Name from http Credential attribute. (Access API key ID).
@@ -163,17 +187,9 @@ public class Aws4Authorizer {
 		 * same as the calculated one.
 		 */
 		private boolean verified;
-		/**
-		 * The domain name of the associated web application user.
-		 */
-		private String domain;
-		/**
-		 * The web application user.
-		 */
-		private WebAppUser webAppUser;
 
 		/**
-		 * Create authorization instance from http exchange.
+		 * Creates authorization instance from http exchange.
 		 * 
 		 * @param httpExchange http exchange to extract the authorization info
 		 */
@@ -237,16 +253,62 @@ public class Aws4Authorizer {
 		}
 
 		/**
-		 * Get name from http Credential attribute.
+		 * Initializes instance from other instance.
+		 * 
+		 * @param authorization other instance to copy fields
+		 * @throws NullPointerException if authorization is {@code null}
+		 */
+		protected Authorization(Authorization authorization) {
+			if (authorization == null) {
+				throw new NullPointerException("authorization must not be null!");
+			}
+			this.name = authorization.name;
+			this.scope = authorization.scope;
+			this.signedHeaders = authorization.signedHeaders;
+			this.signature = authorization.signature;
+			this.dateTime = authorization.dateTime;
+			this.inTime = authorization.inTime;
+		}
+
+		/**
+		 * Gets name from http Credential attribute.
 		 * 
 		 * @return name from http Credential attribute
 		 */
+		@Override
 		public String getName() {
 			return name;
 		}
 
+		@Override
+		public int hashCode() {
+			return name.hashCode();
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			if (this == obj)
+				return true;
+			if (obj == null)
+				return false;
+			if (getClass() != obj.getClass())
+				return false;
+			Authorization other = (Authorization) obj;
+			if (name == null) {
+				if (other.name != null)
+					return false;
+			} else if (!name.equals(other.name))
+				return false;
+			return true;
+		}
+
+		@Override
+		public String toString() {
+			return name;
+		}
+
 		/**
-		 * Get signature from http Signature attribute.
+		 * Gets signature from http Signature attribute.
 		 * 
 		 * @return signature from http Signature attribute
 		 */
@@ -255,25 +317,7 @@ public class Aws4Authorizer {
 		}
 
 		/**
-		 * Get web application user.
-		 * 
-		 * @return web application user
-		 */
-		public WebAppUser getWebAppUser() {
-			return webAppUser;
-		}
-
-		/**
-		 * Get domain name of the associated web application user.
-		 * 
-		 * @return domain name of the associated web application user
-		 */
-		public String getDomain() {
-			return domain;
-		}
-
-		/**
-		 * Verify provided calculated signature matches the signature in the
+		 * Verifies provided calculated signature matches the signature in the
 		 * http headers.
 		 * 
 		 * @param signature calculated signature
@@ -297,7 +341,7 @@ public class Aws4Authorizer {
 
 		/**
 		 * Indicates, if the signature is verified.
-		 * 
+		 * <p>
 		 * Requires to execute {@link #verify(String)} before.
 		 * 
 		 * @return {@code true}, if matching, {@code false}, otherwise.
@@ -308,7 +352,7 @@ public class Aws4Authorizer {
 		}
 
 		/**
-		 * Get date and time from the http header.
+		 * Gets date and time from the http header.
 		 * 
 		 * @return date and time from the http header
 		 */
@@ -328,7 +372,7 @@ public class Aws4Authorizer {
 		}
 
 		/**
-		 * Check scope of signature.
+		 * Checks scope of signature.
 		 * 
 		 * @param region region
 		 * @return {@code true}, if the signature contains the expected scope,
@@ -342,7 +386,7 @@ public class Aws4Authorizer {
 		}
 
 		/**
-		 * Get list of elements from http Credential attribute building the
+		 * Gets list of elements from http Credential attribute building the
 		 * scope.
 		 * 
 		 * @return list of elements from http Credential attribute building the
@@ -353,7 +397,7 @@ public class Aws4Authorizer {
 		}
 
 		/**
-		 * Get list of signed headers from http SignedHeaders attribute.
+		 * Gets list of signed headers from http SignedHeaders attribute.
 		 * 
 		 * @return list of signed headers from http SignedHeaders attribute.
 		 * 
@@ -362,6 +406,121 @@ public class Aws4Authorizer {
 			return signedHeaders;
 		}
 
+		/**
+		 * Creates a web application authorization including specific
+		 * permissions of the associated web user.
+		 * 
+		 * @param domain domain name
+		 * @param webAppUser web-app user
+		 * @return web application authorization
+		 * @throws NullPointerException if any parameter is {@code null}
+		 */
+		public WebAppAuthorization createWebAppAuthorization(String domain, WebAppUser webAppUser) {
+			return new WebAppAuthorization(this, domain, webAppUser);
+		}
+	}
+
+	/**
+	 * Web application authorization.
+	 */
+	public static class WebAppAuthorization extends Authorization implements ExtensiblePrincipal<WebAppAuthorization> {
+
+		private AdditionalInfo additionalInfo;
+
+		/**
+		 * The domain name of the associated web application user.
+		 */
+		private String domain;
+		/**
+		 * The web application user.
+		 */
+		private WebAppUser webAppUser;
+
+		/**
+		 * Creates a web application authorization instance.
+		 * 
+		 * @param authorization http authorization
+		 * @param domain domain name
+		 * @param webAppUser web application user
+		 * @throws NullPointerException if any parameter is {@code null}
+		 */
+		public WebAppAuthorization(Authorization authorization, String domain, WebAppUser webAppUser) {
+			super(authorization);
+			if (domain == null) {
+				throw new NullPointerException("domain must not be null!");
+			}
+			if (webAppUser == null) {
+				throw new NullPointerException("webAppUser must not be null!");
+			}
+			this.domain = domain;
+			this.webAppUser = webAppUser;
+			Map<String, Object> info = new HashMap<>();
+			info.put(PrincipalInfo.INFO_NAME, authorization.getName());
+			info.put(PrincipalInfo.INFO_PROVIDER, webPrincipalInfoProvider);
+			info.put(DomainPrincipalInfo.INFO_DOMAIN, domain);
+			this.additionalInfo = AdditionalInfo.from(info);
+		}
+
+		@Override
+		public int hashCode() {
+			final int prime = 31;
+			int result = super.hashCode();
+			result = prime * result + ((domain == null) ? 0 : domain.hashCode());
+			return result;
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			if (!super.equals(obj)) {
+				return false;
+			}
+			WebAppAuthorization other = (WebAppAuthorization) obj;
+			if (domain == null) {
+				if (other.domain != null)
+					return false;
+			} else if (!domain.equals(other.domain))
+				return false;
+			return true;
+		}
+
+		@Override
+		public String toString() {
+			return super.toString() + "@" + domain;
+		}
+
+		/**
+		 * Gets web application user.
+		 * 
+		 * @return web application user
+		 */
+		public WebAppUser getWebAppUser() {
+			return webAppUser;
+		}
+
+		/**
+		 * Gets domain name of the associated web application user.
+		 * 
+		 * @return domain name of the associated web application user
+		 */
+		public String getDomain() {
+			return domain;
+		}
+
+		@Override
+		public WebAppAuthorization amend(AdditionalInfo additionalInfo) {
+			this.additionalInfo = additionalInfo;
+			return null;
+		}
+
+		@Override
+		public AdditionalInfo getExtendedInfo() {
+			return additionalInfo;
+		}
+
+		@Override
+		public boolean isAnonymous() {
+			return false;
+		}
 	}
 
 	/**
@@ -417,6 +576,10 @@ public class Aws4Authorizer {
 
 	/**
 	 * Create AWS4-HMAC-SHA256 signature verifier.
+	 * <p>
+	 * The S3 region must be the fixed region used in javascript app to send
+	 * request to the http-host, for the provided javascript app use
+	 * {@link S3ProxyClient#DEFAULT_REGION}.
 	 * 
 	 * @param webAppUserProvider web application user provider.
 	 * @param region S3 region
@@ -426,6 +589,9 @@ public class Aws4Authorizer {
 	public Aws4Authorizer(WebAppUserProvider webAppUserProvider, String region) {
 		if (webAppUserProvider == null) {
 			throw new NullPointerException("Web application user provider must not be null!");
+		}
+		if (region == null) {
+			throw new NullPointerException("region must not be null!");
 		}
 		this.webAppUserProvider = webAppUserProvider;
 		this.region = region;
@@ -441,8 +607,6 @@ public class Aws4Authorizer {
 	 */
 	public Authorization checkSignature(final HttpExchange httpExchange, String banTag) throws IOException {
 		Authorization authorization = null;
-		byte[] payload = "<h1>401 - Unauthorized</h1>".getBytes(StandardCharsets.UTF_8);
-		String contentType = "text/html; charset=utf-8";
 		int httpCode = 401;
 		try {
 			LOGGER.debug("{} {} {}", banTag, httpExchange.getRequestMethod(), httpExchange.getRequestURI());
@@ -459,10 +623,8 @@ public class Aws4Authorizer {
 						if (authorization.isInTime()) {
 							banStore.remove(httpExchange.getRemoteAddress().getAddress());
 						}
-						authorization.webAppUser = domainUser.user;
-						authorization.domain = domainUser.domain;
-						payload = null;
 						LOGGER.debug("key {} verified.", name);
+						return authorization.createWebAppAuthorization(domainUser.domain, domainUser.user);
 					} else {
 						LOGGER.warn("key {}", name);
 						LOGGER.warn("{}", requestSignature);
@@ -473,12 +635,9 @@ public class Aws4Authorizer {
 		} catch (Throwable t) {
 			LOGGER.warn("AWS4", t);
 			httpCode = 500;
-			payload = "<h1>500 - Internal Server Error</h1>".getBytes(StandardCharsets.UTF_8);
 			HttpService.ban(httpExchange, banTag);
 		}
-		if (payload != null) {
-			HttpService.respond(httpExchange, httpCode, contentType, payload);
-		}
+		HttpService.respond(httpExchange, httpCode, null, null);
 		return authorization;
 	}
 
@@ -512,19 +671,6 @@ public class Aws4Authorizer {
 			}
 		}
 		return true;
-	}
-
-	/**
-	 * Http respond with unauthorized.
-	 * 
-	 * @param httpExchange http exchange
-	 * @throws IOException if an i/o error occurs on sending a response
-	 */
-	public void respondUnauthorized(final HttpExchange httpExchange) throws IOException {
-		int httpCode = 401;
-		byte[] payload = "<h1>401 - Unauthorized</h1>".getBytes(StandardCharsets.UTF_8);
-		String contentType = "text/html; charset=utf-8";
-		HttpService.respond(httpExchange, httpCode, contentType, payload);
 	}
 
 	/**
@@ -762,7 +908,7 @@ public class Aws4Authorizer {
 	 * Format date and time
 	 * 
 	 * @param millis milliseconds of epoch
-	 * @return date and time in ISO ("yyyymmddThhMMssZ").
+	 * @return date and time in ISO ("yyyymmddTHHMMssZ").
 	 */
 	public static String formatDateTime(long millis) {
 		String date = DateTimeFormatter.ISO_INSTANT

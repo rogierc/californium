@@ -16,9 +16,11 @@ package org.eclipse.californium.cloud.s3.util;
 
 import java.util.Set;
 
+import org.eclipse.californium.cloud.util.DeviceIdentifier;
+
 /**
  * Device groups provider.
- * 
+ * <p>
  * Resolves domain-group name pairs to set of devices.
  * 
  * @since 3.12
@@ -30,7 +32,8 @@ public interface DeviceGroupProvider {
 	 * 
 	 * @param domain domain name
 	 * @param group group name
-	 * @return set of device names.
+	 * @return set of device identifiers.
+	 * @since 3.13 use DeviceIdentifier instead of String
 	 */
-	Set<String> getGroup(String domain, String group);
+	Set<DeviceIdentifier> getGroup(String domain, String group);
 }

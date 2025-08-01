@@ -17,8 +17,8 @@ package org.eclipse.californium.cloud.resources;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.BAD_OPTION;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.CHANGED;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.CONTENT;
-import static org.eclipse.californium.core.coap.CoAP.ResponseCode.NOT_ACCEPTABLE;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.FORBIDDEN;
+import static org.eclipse.californium.core.coap.CoAP.ResponseCode.NOT_ACCEPTABLE;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.APPLICATION_CBOR;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.APPLICATION_JAVASCRIPT;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.APPLICATION_JSON;
@@ -28,7 +28,6 @@ import static org.eclipse.californium.core.coap.MediaTypeRegistry.APPLICATION_XM
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.TEXT_PLAIN;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.UNDEFINED;
 
-import java.security.Principal;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.Collection;
@@ -39,12 +38,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
 
 import org.eclipse.californium.cloud.BaseServer;
-import org.eclipse.californium.cloud.option.ReadEtagOption;
-import org.eclipse.californium.cloud.option.ReadResponseOption;
+import org.eclipse.californium.cloud.option.ResponseCodeOption;
+import org.eclipse.californium.cloud.option.ServerCustomOptions;
 import org.eclipse.californium.cloud.option.TimeOption;
-import org.eclipse.californium.cloud.util.DeviceManager;
-import org.eclipse.californium.cloud.util.DeviceManager.DeviceInfo;
-import org.eclipse.californium.core.CoapResource;
+import org.eclipse.californium.cloud.util.PrincipalInfo;
+import org.eclipse.californium.cloud.util.PrincipalInfo.Type;
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.WebLink;
 import org.eclipse.californium.core.coap.LinkFormat;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
@@ -52,20 +51,18 @@ import org.eclipse.californium.core.coap.Option;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.coap.UriQueryParameter;
-import org.eclipse.californium.core.server.resources.CoapExchange;
+import org.eclipse.californium.core.coap.option.OpaqueOption;
 import org.eclipse.californium.core.server.resources.Resource;
 import org.eclipse.californium.core.server.resources.ResourceAttributes;
 import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.util.LeastRecentlyUpdatedCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 /**
  * Devices resource.
  * <p>
  * Keeps the content of POST request as sub-resource using the device name from
  * the additional info of the principal as name of the sub-resource. e.g.:
- * </p>
  * 
  * <code>
  * coaps://${host}/devices POST "Hi!" by principal "Client_identity"
@@ -73,7 +70,6 @@ import org.slf4j.LoggerFactory;
  * 
  * <p>
  * results in a resource:
- * </p>
  * 
  * <code>
  * "/devices/Client_identity" with content "Hi!".
@@ -87,7 +83,6 @@ import org.slf4j.LoggerFactory;
  * 
  * <p>
  * Supported content types:
- * </p>
  * 
  * <ul>
  * <li>{@link MediaTypeRegistry#TEXT_PLAIN}</li>
@@ -101,11 +96,8 @@ import org.slf4j.LoggerFactory;
  * <p>
  * For GET, {@link MediaTypeRegistry#APPLICATION_LINK_FORMAT} is also supported
  * and returns a list of web-links for the current devices.
- * </p>
- * 
  * <p>
  * Supported query parameter:
- * </p>
  * 
  * <dl>
  * <dt>{@value #URI_QUERY_OPTION_READ}</dt>
@@ -116,20 +108,18 @@ import org.slf4j.LoggerFactory;
  * 
  * Default argument only applies, if the parameter is provided, but without
  * argument.
- * 
  * <p>
  * Supported custom options:
- * </p>
  * 
  * <dl>
  * <dt>{@link TimeOption}, {@value TimeOption#COAP_OPTION_TIME}</dt>
  * <dd>Time synchronization.</dd>
- * <dt>{@link ReadResponseOption},
- * {@value ReadResponseOption#COAP_OPTION_READ_RESPONSE}</dt>
+ * <dt>{@link ResponseCodeOption},
+ * {@value ServerCustomOptions#COAP_OPTION_READ_RESPONSE}</dt>
  * <dd>Response code of piggybacked read request. See query parameter
  * {@value #URI_QUERY_OPTION_READ}</dd>
- * <dt>{@link ReadEtagOption},
- * {@value ReadEtagOption#COAP_OPTION_READ_ETAG}</dt>
+ * <dt>{@link OpaqueOption},
+ * {@value ServerCustomOptions#COAP_OPTION_READ_ETAG}</dt>
  * <dd>ETAG of piggybacked read request. See query parameter
  * {@value #URI_QUERY_OPTION_READ}</dd>
  * </dl>
@@ -142,16 +132,13 @@ import org.slf4j.LoggerFactory;
  * 
  * <p>
  * results in a resource:
- * </p>
  * 
  * <code>
  * "/devices/dev-1200045" with content "Temperature: 25.4°".
  * </code>
  * 
  * <p>
- * 
  * and returns the content of
- * </p>
  * 
  * <code>
  * "/devices/dev-1200045/config".
@@ -159,11 +146,10 @@ import org.slf4j.LoggerFactory;
  * 
  * <p>
  * (Default for "read" argument is "config".)
- * </p>
  * 
  * @since 3.12
  */
-public class Devices extends CoapResource {
+public class Devices extends ProtectedCoapResource {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(Devices.class);
 	private static final Logger LOGGER_TRACKER = LoggerFactory.getLogger("org.eclipse.californium.gnss.tracker");
@@ -204,7 +190,7 @@ public class Devices extends CoapResource {
 	 * @param config configuration
 	 */
 	public Devices(Configuration config) {
-		super(RESOURCE_NAME);
+		super(RESOURCE_NAME, Type.DEVICE, Type.WEB);
 		Arrays.sort(CONTENT_TYPES);
 		getAttributes().setTitle("Resource, which keeps track of POSTing devices.");
 		getAttributes().addContentTypes(CONTENT_TYPES);
@@ -239,12 +225,11 @@ public class Devices extends CoapResource {
 
 	@Override
 	public void handleGET(final CoapExchange exchange) {
-		Request request = exchange.advanced().getRequest();
-		int accept = request.getOptions().getAccept();
+		int accept = exchange.getRequestOptions().getAccept();
 		if (accept != UNDEFINED && accept != APPLICATION_LINK_FORMAT) {
 			exchange.respond(NOT_ACCEPTABLE);
 		} else {
-			List<String> query = exchange.getRequestOptions().getUriQuery();
+			List<String> query = exchange.getRequestOptions().getUriQueryStrings();
 			if (query.size() > 1) {
 				exchange.respond(BAD_OPTION, "only one search query is supported!", TEXT_PLAIN);
 				return;
@@ -259,24 +244,19 @@ public class Devices extends CoapResource {
 
 	@Override
 	public void handlePOST(final CoapExchange exchange) {
-		Request request = exchange.advanced().getRequest();
-		if (request == null) {
-			throw new NullPointerException("request must not be null!");
-		}
+		int format = exchange.getRequestOptions().getContentFormat();
 
-		int format = request.getOptions().getContentFormat();
 		if (format != UNDEFINED && Arrays.binarySearch(CONTENT_TYPES, format) < 0) {
-			Response response = new Response(NOT_ACCEPTABLE);
-			exchange.respond(response);
+			exchange.respond(NOT_ACCEPTABLE);
 			return;
 		}
 
 		boolean updateSeries = false;
 		String read = null;
 		try {
-			UriQueryParameter helper = request.getOptions().getUriQueryParameter(SUPPORTED);
-			LOGGER.info("URI-Query: {}", request.getOptions().getUriQuery());
-			List<Option> others = request.getOptions().getOthers();
+			UriQueryParameter helper = exchange.getRequestOptions().getUriQueryParameter(SUPPORTED);
+			LOGGER.info("URI-Query: {}", exchange.getRequestOptions().getUriQuery());
+			List<Option> others = exchange.getRequestOptions().getOthers();
 			if (!others.isEmpty()) {
 				LOGGER.info("Other options: {}", others);
 			}
@@ -294,11 +274,11 @@ public class Devices extends CoapResource {
 			return;
 		}
 
+		PrincipalInfo info = getPrincipalInfo(exchange);
 		Response response;
-		Principal principal = request.getSourceContext().getPeerIdentity();
-		DeviceInfo info = DeviceManager.getDeviceInfo(principal);
-		String name = (info != null && !info.provisioning) ? info.name : null;
+		String name = info.name;
 		if (name != null) {
+			Request request = exchange.advanced().getRequest();
 			final TimeOption timeOption = TimeOption.getMessageTime(request);
 			final long time = timeOption.getLongValue();
 			String log = null;
@@ -368,16 +348,16 @@ public class Devices extends CoapResource {
 	}
 
 	/**
-	 * Resource representing devices
+	 * Resource representing devices.
 	 */
-	public static class Device extends CoapResource {
+	public static class Device extends ProtectedCoapResource {
 
 		private Series series = null;
 		private volatile Request post;
 		private volatile long time;
 
 		private Device(String name) {
-			super(name);
+			super(name, Type.DEVICE, Type.WEB);
 			setObservable(true);
 		}
 
@@ -440,10 +420,8 @@ public class Devices extends CoapResource {
 		@Override
 		public void handleGET(CoapExchange exchange) {
 			Request devicePost = post;
-			// get request to read out details
-			Request request = exchange.advanced().getRequest();
 			int format = devicePost.getOptions().getContentFormat();
-			int accept = request.getOptions().getAccept();
+			int accept = exchange.getRequestOptions().getAccept();
 			if (accept == UNDEFINED) {
 				accept = format == UNDEFINED ? APPLICATION_OCTET_STREAM : format;
 			} else if (format == UNDEFINED) {
@@ -467,13 +445,13 @@ public class Devices extends CoapResource {
 		}
 	}
 
-	public static class Series extends CoapResource {
+	public static class Series extends ProtectedCoapResource {
 
 		private final String startDate;
 		private final StringBuilder content = new StringBuilder();
 
 		private Series(String timestamp) {
-			super(SUB_RESOURCE_NAME);
+			super(SUB_RESOURCE_NAME, Type.WEB);
 			this.startDate = timestamp;
 		}
 
@@ -513,8 +491,7 @@ public class Devices extends CoapResource {
 		}
 
 		public void handleGET(CoapExchange exchange) {
-			Request request = exchange.advanced().getRequest();
-			int accept = request.getOptions().getAccept();
+			int accept = exchange.getRequestOptions().getAccept();
 			if (accept != UNDEFINED && accept != TEXT_PLAIN) {
 				exchange.respond(NOT_ACCEPTABLE);
 				return;

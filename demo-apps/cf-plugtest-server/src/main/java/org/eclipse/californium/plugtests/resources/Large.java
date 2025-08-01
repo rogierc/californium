@@ -18,8 +18,8 @@ package org.eclipse.californium.plugtests.resources;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.*;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.*;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 
 /**
  * This resource implements a test of specification for the
@@ -32,6 +32,7 @@ public class Large extends CoapResource {
 		getAttributes().setTitle("Large resource");
 		getAttributes().addResourceType("block");
 		getAttributes().setMaximumSizeEstimate(1280);
+		addSupportedContentFormats(TEXT_PLAIN);
 	}
 
 	@Override

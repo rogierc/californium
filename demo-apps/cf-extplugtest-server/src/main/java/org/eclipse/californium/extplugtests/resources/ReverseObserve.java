@@ -22,7 +22,6 @@ import static org.eclipse.californium.core.coap.CoAP.ResponseCode.NOT_ACCEPTABLE
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.SERVICE_UNAVAILABLE;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.APPLICATION_OCTET_STREAM;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.TEXT_PLAIN;
-import static org.eclipse.californium.core.coap.MediaTypeRegistry.UNDEFINED;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -37,7 +36,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
@@ -48,8 +49,6 @@ import org.eclipse.californium.core.coap.ResponseTimeout;
 import org.eclipse.californium.core.coap.Token;
 import org.eclipse.californium.core.coap.UriQueryParameter;
 import org.eclipse.californium.core.network.Endpoint;
-import org.eclipse.californium.core.observe.NotificationListener;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.config.SystemConfig;
 import org.eclipse.californium.elements.exception.ConnectorException;
@@ -92,7 +91,7 @@ import org.slf4j.LoggerFactory;
  * client. "feed-CON" resource will send notifies using CON, "feed-NON" using
  * NON)
  */
-public class ReverseObserve extends CoapResource implements NotificationListener {
+public class ReverseObserve extends CoapResource implements BiConsumer<Request, Response> {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(ReverseObserve.class);
 	private static final Logger HEALTH_LOGGER = LoggerFactory.getLogger(LOGGER.getName() + ".health");
@@ -160,8 +159,7 @@ public class ReverseObserve extends CoapResource implements NotificationListener
 		super(RESOURCE_NAME);
 		this.executor = executor;
 		getAttributes().setTitle("Reverse Observe");
-		getAttributes().addContentType(TEXT_PLAIN);
-		getAttributes().addContentType(APPLICATION_OCTET_STREAM);
+		addSupportedContentFormats(TEXT_PLAIN, APPLICATION_OCTET_STREAM);
 		long healthStatusInterval = config.get(SystemConfig.HEALTH_STATUS_INTERVAL, TimeUnit.MILLISECONDS);
 		if (healthStatusInterval > 0 && HEALTH_LOGGER.isDebugEnabled()) {
 			executor.scheduleWithFixedDelay(new Runnable() {
@@ -181,14 +179,6 @@ public class ReverseObserve extends CoapResource implements NotificationListener
 	@Override
 	public void handlePOST(CoapExchange exchange) {
 
-		// get request to read out details
-		Request request = exchange.advanced().getRequest();
-
-		int accept = request.getOptions().getAccept();
-		if (accept != UNDEFINED && accept != TEXT_PLAIN && accept != APPLICATION_OCTET_STREAM) {
-			exchange.respond(NOT_ACCEPTABLE);
-			return;
-		}
 		IncomingExchange incomingExchange = new IncomingExchange(exchange);
 		if (!incomingExchange.isProcessed()) {
 			processPOST(incomingExchange);
@@ -252,7 +242,7 @@ public class ReverseObserve extends CoapResource implements NotificationListener
 	}
 
 	@Override
-	public void onNotification(Request request, Response response) {
+	public void accept(Request request, Response response) {
 		overallNotifies.incrementAndGet();
 		Token token = response.getToken();
 		Observation observation = observesByToken.get(token);

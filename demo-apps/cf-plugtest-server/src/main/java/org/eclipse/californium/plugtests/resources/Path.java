@@ -18,9 +18,9 @@ package org.eclipse.californium.plugtests.resources;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.*;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.*;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.coap.LinkFormat;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 
 /**
  * This resource implements a test of specification for the ETSI IoT CoAP Plugtests, London, UK, 7--9 Mar 2014.
@@ -30,7 +30,7 @@ public class Path extends CoapResource {
 	public Path() {
 		super("path");
 		getAttributes().setTitle("Hierarchical link description entry");
-		getAttributes().addContentType(APPLICATION_LINK_FORMAT);
+		addSupportedContentFormats(APPLICATION_LINK_FORMAT);
 		add(new PathSub("sub1"));
 		add(new PathSub("sub2"));
 		add(new PathSub("sub3"));

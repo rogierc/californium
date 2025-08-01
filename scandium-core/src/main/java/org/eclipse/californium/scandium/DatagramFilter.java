@@ -57,4 +57,31 @@ public interface DatagramFilter {
 	 * @since 3.6
 	 */
 	boolean onMacError(Record record, Connection connection);
+
+	/**
+	 * Called when a datagram packed is dropped. Allows to inject packet based
+	 * action in form of callback.
+	 * 
+	 * @param packet the dropped datagram packet
+	 * @since 4.0 (moved from obsolete DatagramFilterExtended)
+	 */
+	void onDrop(DatagramPacket packet);
+
+	/**
+	 * Called when a record is dropped. Allows to inject record based action in
+	 * form of callback.
+	 * 
+	 * @param record the dropped record
+	 * @since 4.0 (moved from obsolete DatagramFilterExtended)
+	 */
+	void onDrop(Record record);
+
+	/**
+	 * Called, when the application rejected to authorize an anonymous client.
+	 * 
+	 * @param connection rejected connection
+	 * @since 4.0
+	 */
+	void onApplicationAuthorizationRejected(Connection connection);
+
 }

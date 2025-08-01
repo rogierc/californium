@@ -16,6 +16,7 @@ package org.eclipse.californium.cloud.s3.http;
 
 import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 
 import org.eclipse.californium.cloud.http.HttpService;
 import org.eclipse.californium.cloud.s3.proxy.S3AsyncProxyClient;
@@ -23,7 +24,6 @@ import org.eclipse.californium.cloud.s3.proxy.S3ProxyClient;
 import org.eclipse.californium.cloud.s3.proxy.S3ProxyRequest;
 import org.eclipse.californium.core.coap.CoAP;
 import org.eclipse.californium.core.coap.Request;
-import org.eclipse.californium.elements.util.StandardCharsets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,7 +31,9 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
 /**
- * Create page for single page application.
+ * Single page application handler.
+ * <p>
+ * Initial page, which loads the related java-script application.
  * 
  * @since 3.12
  */
@@ -111,28 +113,35 @@ public class SinglePageApplication implements HttpHandler {
 	public void handle(final HttpExchange httpExchange) throws IOException {
 		final URI uri = httpExchange.getRequestURI();
 		LOGGER.info("/request: {} {}", httpExchange.getRequestMethod(), uri);
-		String method = httpExchange.getRequestMethod();
 		String contentType = "text/html; charset=utf-8";
 		byte[] payload = null;
-		int httpCode = 405;
-		if (method.equals("GET")) {
-			String path = uri.getPath();
-			if (path != null && path.equals("/")) {
+		int httpCode = 404;
+		if (HttpService.strictPathCheck(httpExchange)) {
+			String method = httpExchange.getRequestMethod();
+			if (method.equals("GET")) {
+				String page = createPage();
+				httpCode = 200;
+				payload = page.toString().getBytes(StandardCharsets.UTF_8);
+				httpExchange.getResponseHeaders().add("Cache-Control", "no-cache");
+			} else if (method.equals("HEAD")) {
 				String page = createPage();
 				httpCode = 200;
 				payload = page.toString().getBytes(StandardCharsets.UTF_8);
 				httpExchange.getResponseHeaders().add("Cache-Control", "no-cache");
 			} else {
 				httpCode = 405;
-				HttpService.ban(httpExchange, "HTTPS");
 			}
-		} else if (method.equals("HEAD")) {
 		} else {
-			payload = "<h1>405 - Method not allowed!</h1>".getBytes(StandardCharsets.UTF_8);
+			HttpService.ban(httpExchange, "HTTPS");
 		}
 		HttpService.respond(httpExchange, httpCode, contentType, payload);
 	}
 
+	/**
+	 * Creates initial web page loading the javascript app.
+	 * 
+	 * @return initial web page
+	 */
 	private String createPage() {
 		String base = getBase();
 		StringBuilder page = new StringBuilder();
@@ -151,7 +160,6 @@ public class SinglePageApplication implements HttpHandler {
 		page.append("</title>\n");
 		page.append("</head>\n");
 		page.append("<body>\n");
-		// page.append("<div id=\"logo\"></div>\n");
 		page.append("<h2><div id=\"logo\"></div><div id=\"title\">").append(singlePageApplicationTitle + ":")
 				.append("</div></h2>\n");
 		page.append("<div id=\"app\"></div>\n");
@@ -171,8 +179,8 @@ public class SinglePageApplication implements HttpHandler {
 	}
 
 	/**
-	 * Add base to relative URL.
-	 * 
+	 * Adds base to relative URL.
+	 * <p>
 	 * If provided URL is not relative (contains a scheme), return the URL
 	 * unmodified.
 	 * 
@@ -189,7 +197,7 @@ public class SinglePageApplication implements HttpHandler {
 	}
 
 	/**
-	 * Get base URL.
+	 * Gets base URL.
 	 * 
 	 * @return base URL.
 	 */
@@ -205,7 +213,7 @@ public class SinglePageApplication implements HttpHandler {
 	}
 
 	/**
-	 * Get scheme.
+	 * Gets scheme.
 	 * 
 	 * @param url URL
 	 * @param defaultScheme default scheme

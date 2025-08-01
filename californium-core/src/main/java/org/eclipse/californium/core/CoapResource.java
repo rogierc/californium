@@ -33,6 +33,7 @@
 package org.eclipse.californium.core;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -40,19 +41,16 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Predicate;
 
-import org.eclipse.californium.core.coap.CoAP.Code;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.coap.CoAP.Type;
+import org.eclipse.californium.core.coap.MediaTypeRegistry;
 import org.eclipse.californium.core.coap.OptionSet;
 import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.network.Exchange;
 import org.eclipse.californium.core.observe.ObserveNotificationOrderer;
 import org.eclipse.californium.core.observe.ObserveRelation;
-import org.eclipse.californium.core.observe.ObserveRelationContainer;
-import org.eclipse.californium.core.observe.ObserveRelationFilter;
-import org.eclipse.californium.core.server.ServerMessageDeliverer;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.core.server.resources.ObservableResource;
 import org.eclipse.californium.core.server.resources.Resource;
 import org.eclipse.californium.core.server.resources.ResourceAttributes;
@@ -61,21 +59,24 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * CoapResource is a basic implementation of a resource. Extend this class to
- * write your own resources. Instances of type or subtype of CoapResource can be
- * built up to a tree very easily, see {@link #add(CoapResource)}.
+ * CoapResource is a basic implementation of a resource.
  * <p>
- * CoapResource uses four distinct methods to handle requests:
- * <tt>handleGET()</tt>, <tt>handlePOST()</tt>, <tt>handlePUT()</tt> and
- * <tt>handleDELETE()</tt>. Each method has a default implementation that
- * responds with a 4.05 (Method Not Allowed). Each method exists twice but with
- * a different parameter: <tt>handleGET(Exchange)</tt> and
- * <tt>handleGET(CoAPExchange)</tt> for instance. The class {@link Exchange} is
- * used internally in Californium to keep the state of an exchange of CoAP
- * messages. Only override this version of the method if you need to access
- * detailed information of an exchange. Most developer should rather override
- * the latter version. CoAPExchange provides a save and user-friendlier API that
- * can be used to respond to a request.
+ * Extend this class to write your own resources. Instances of type or subtype
+ * of CoapResource can be built up to a tree very easily, see
+ * {@link #add(CoapResource)}.
+ * <p>
+ * CoapResource uses seven distinct methods to handle requests:
+ * {@code handleGET()}, {@code handlePOST()}, {@code handlePUT()} and
+ * {@code handleDELETE()}, {@code handleFETCH()}, {@code handlePATCH()} and
+ * {@code handleIPATCH()}. Each method has a default implementation that
+ * responds with a 4.05 (Method Not Allowed). Each method uses a
+ * {@link CoapExchange} which provides a save and user-friendly API to respond
+ * to a request. There is also a generic function
+ * {@code handleRequest(Exchange)}, which is called ahead and uses a raw
+ * {@link Exchange}. That class {@link Exchange} is used internally in
+ * Californium to keep the state of an exchange of CoAP messages. Only override
+ * this version of the method if you need to access detailed information of an
+ * exchange. Most developer should rather override the latter version.
  * <p>
  * The following example override the four handle-method.
  * 
@@ -133,72 +134,101 @@ import org.slf4j.LoggerFactory;
  * when a child resource is added or removed or when a CoAP observe relation is
  * added or canceled.
  */
-@SuppressWarnings("deprecation")
 public class CoapResource implements Resource, ObservableResource {
 
 	/**
 	 * The logger.
-	 * 
-	 * @deprecated scope will change to private
 	 */
-	@Deprecated
-	protected final static Logger LOGGER = LoggerFactory.getLogger(CoapResource.class);
+	private final static Logger LOGGER = LoggerFactory.getLogger(CoapResource.class);
 
 	/**
 	 * The attributes of this resource.
-	 * 
-	 * Note: if the attributes are intended to change and that change should be
-	 * "atomic", this must be done by creating a clone of current
+	 * <p>
+	 * <b>Note:</b> if the attributes are intended to change and that change
+	 * should be "atomic", this must be done by creating a clone of current
 	 * {@link ResourceAttributes}, modify the clone and then replace this
 	 * original {@link ResourceAttributes} by the modified
 	 * {@link ResourceAttributes}.
 	 */
 	private volatile ResourceAttributes attributes;
+	/**
+	 * The list of supported content formats.
+	 * <p>
+	 * Intended to be used for static lists applied to all methods. If single
+	 * methods needs a specific list or a dynamic list of content formats is
+	 * required, use {@link #checkContentFormat(CoapExchange, int...)} instead.
+	 * If the list contains at least one content format, requests with an
+	 * {@code ACCEPT} option not contained in the list fails with
+	 * {@code 4.06 Not Acceptable}.
+	 * 
+	 * @since 4.0
+	 */
+	private final List<Integer> supportedContentFormats;
 
+	/**
+	 * Lock to protect {@link #changed(ObserveRelationFilter)} from being called
+	 * recusive.
+	 */
 	private final ReentrantLock recursionProtection = new ReentrantLock();
 
-	/* The resource name. */
+	/**
+	 * The resource name.
+	 */
 	private String name;
 
-	/* The resource path. */
+	/**
+	 * The resource path.
+	 */
 	private String path;
 
-	/* Indicates whether this resource is visible to clients. */
+	/**
+	 * Indicates whether this resource is visible to clients.
+	 */
 	private boolean visible;
 
-	/* Indicates whether this resource is observable by clients. */
+	/**
+	 * Indicates whether this resource is observable by clients.
+	 */
 	private boolean observable;
 
-	/*
-	 * The child resources. We need a ConcurrentHashMap to have stronger
-	 * guarantees in a multi-threaded environment (e.g. for discovery to work
-	 * properly).
+	/**
+	 * The child resources.
+	 * <p>
+	 * We need a ConcurrentHashMap to have stronger guarantees in a
+	 * multi-threaded environment (e.g. for discovery to work properly).
 	 */
 	private ConcurrentMap<String, Resource> children;
 
-	/* The parent of this resource. */
+	/**
+	 * The parent of this resource.
+	 */
 	private Resource parent;
 
-	/* The type used for notifications (no change when set to null) */
+	/**
+	 * The type used for notifications (no change when set to {@code null})
+	 */
 	private Type observeType = null;
 
-	/* The list of observers (not CoAP observer). */
+	/**
+	 * The list of observers (not CoAP observer).
+	 */
 	private final List<ResourceObserver> observers;
 
 	/**
 	 * The the list of CoAP observe relations.
 	 * 
-	 * @since 3.6 adapted to a list of observe relations and obsoletes
-	 *        {@link ObserveRelationContainer}.
+	 * @since 3.6 adapted to a list of observe relations.
 	 */
 	private final List<ObserveRelation> observeRelations;
 
-	/* The notification orderer. */
+	/**
+	 * The notification orderer.
+	 */
 	private final ObserveNotificationOrderer notificationOrderer;
 
 	/**
 	 * Constructs a new resource with the specified name.
-	 *
+	 * <p>
 	 * Due to the limitation of {@link OptionSet#getUriPathString()} and similar
 	 * functions, {@code /} characters are not supported!
 	 * 
@@ -213,14 +243,13 @@ public class CoapResource implements Resource, ObservableResource {
 	}
 
 	/**
-	 * Constructs a new resource with the specified name and makes it visible to
-	 * clients if the flag is true.
+	 * Constructs a new resource with the specified name and visibility.
 	 * 
 	 * Due to the limitation of {@link OptionSet#getUriPathString()} and similar
 	 * functions, {@code /} characters are not supported!
 	 * 
 	 * @param name the name
-	 * @param visible if the resource is visible
+	 * @param visible {@code true} if the resource is visible
 	 * @throws NullPointerException if name is {@code null}
 	 * @throws IllegalArgumentException if the name contains a {@code /}
 	 * @since 3.1 (throws IllegalArgumentException, if the name contains a
@@ -237,6 +266,7 @@ public class CoapResource implements Resource, ObservableResource {
 		this.path = "";
 		this.visible = visible;
 		this.attributes = new ResourceAttributes();
+		this.supportedContentFormats = new CopyOnWriteArrayList<>();
 		this.children = new ConcurrentHashMap<>();
 		this.observers = new CopyOnWriteArrayList<>();
 		this.observeRelations = new CopyOnWriteArrayList<>();
@@ -244,53 +274,59 @@ public class CoapResource implements Resource, ObservableResource {
 	}
 
 	/**
-	 * Handles any request in the given exchange. By default it responds with a
-	 * 4.05 (Method Not Allowed). Override this method if your resource handler
-	 * requires advanced access to the internal Exchange class. Most developer
-	 * should be better off with overriding the called methods
-	 * {@link #handleGET(CoapExchange)}, {@link #handlePOST(CoapExchange)},
-	 * {@link #handlePUT(CoapExchange)}, and
-	 * {@link #handleDELETE(CoapExchange)}, which provide a better API through
+	 * Handles any request in the given exchange.
+	 * <p>
+	 * By default it responds with a 4.05 (Method Not Allowed). Override this
+	 * method if your resource handler requires advanced access to the internal
+	 * Exchange class. Most developer should be better off with overriding the
+	 * called methods {@link #handleGET(CoapExchange)},
+	 * {@link #handlePOST(CoapExchange)}, {@link #handlePUT(CoapExchange)},
+	 * {@link #handleDELETE(CoapExchange)}, {@link #handleFETCH(CoapExchange)},
+	 * {@link #handlePATCH(CoapExchange)} and
+	 * {@link #handleIPATCH(CoapExchange)}, which provide a better API through
 	 * the {@link CoapExchange} class.
 	 * 
 	 * @param exchange the exchange with the request
 	 */
 	@Override
 	public void handleRequest(final Exchange exchange) {
-		Code code = exchange.getRequest().getCode();
-		switch (code) {
-		case GET:
-			handleGET(new CoapExchange(exchange));
-			break;
-		case POST:
-			handlePOST(new CoapExchange(exchange));
-			break;
-		case PUT:
-			handlePUT(new CoapExchange(exchange));
-			break;
-		case DELETE:
-			handleDELETE(new CoapExchange(exchange));
-			break;
-		case FETCH:
-			handleFETCH(new CoapExchange(exchange));
-			break;
-		case PATCH:
-			handlePATCH(new CoapExchange(exchange));
-			break;
-		case IPATCH:
-			handleIPATCH(new CoapExchange(exchange));
-			break;
-		default:
-			exchange.sendResponse(new Response(ResponseCode.METHOD_NOT_ALLOWED, true));
-			break;
+		CoapExchange coapExchange = new CoapExchange(exchange);
+		if (checkSupportedContentFormat(coapExchange)) {
+			switch (coapExchange.getRequestCode()) {
+			case GET:
+				handleGET(coapExchange);
+				break;
+			case POST:
+				handlePOST(coapExchange);
+				break;
+			case PUT:
+				handlePUT(coapExchange);
+				break;
+			case DELETE:
+				handleDELETE(coapExchange);
+				break;
+			case FETCH:
+				handleFETCH(coapExchange);
+				break;
+			case PATCH:
+				handlePATCH(coapExchange);
+				break;
+			case IPATCH:
+				handleIPATCH(coapExchange);
+				break;
+			default:
+				coapExchange.respond(new Response(ResponseCode.METHOD_NOT_ALLOWED, true));
+				break;
+			}
 		}
 	}
 
 	/**
-	 * Handles the GET request in the given CoAPExchange. By default it responds
-	 * with a 4.05 (Method Not Allowed). Override this method to respond
-	 * differently to GET requests. Possible response codes for GET requests are
-	 * Content (2.05) and Valid (2.03).
+	 * Handles the GET request in the given CoAPExchange.
+	 * <p>
+	 * By default it responds with a 4.05 (Method Not Allowed). Override this
+	 * method to respond differently to GET requests. Possible response codes
+	 * for GET requests are Content (2.05) and Valid (2.03).
 	 * 
 	 * @param exchange the CoapExchange for the simple API
 	 */
@@ -299,10 +335,11 @@ public class CoapResource implements Resource, ObservableResource {
 	}
 
 	/**
-	 * Handles the POST request in the given CoAPExchange. By default it
-	 * responds with a 4.05 (Method Not Allowed). Override this method to
-	 * respond differently to POST requests. Possible response codes for POST
-	 * requests are Created (2.01), Changed (2.04), and Deleted (2.02).
+	 * Handles the POST request in the given CoAPExchange.
+	 * <p>
+	 * By default it responds with a 4.05 (Method Not Allowed). Override this
+	 * method to respond differently to POST requests. Possible response codes
+	 * for POST requests are Created (2.01), Changed (2.04), and Deleted (2.02).
 	 *
 	 * @param exchange the CoapExchange for the simple API
 	 */
@@ -311,10 +348,11 @@ public class CoapResource implements Resource, ObservableResource {
 	}
 
 	/**
-	 * Handles the PUT request in the given CoAPExchange. By default it responds
-	 * with a 4.05 (Method Not Allowed). Override this method to respond
-	 * differently to PUT requests. Possible response codes for PUT requests are
-	 * Created (2.01) and Changed (2.04).
+	 * Handles the PUT request in the given CoAPExchange.
+	 * <p>
+	 * By default it responds with a 4.05 (Method Not Allowed). Override this
+	 * method to respond differently to PUT requests. Possible response codes
+	 * for PUT requests are Created (2.01) and Changed (2.04).
 	 *
 	 * @param exchange the CoapExchange for the simple API
 	 */
@@ -323,10 +361,11 @@ public class CoapResource implements Resource, ObservableResource {
 	}
 
 	/**
-	 * Handles the DELETE request in the given CoAPExchange. By default it
-	 * responds with a 4.05 (Method Not Allowed). Override this method to
-	 * respond differently to DELETE requests. The response code to a DELETE
-	 * request should be a Deleted (2.02).
+	 * Handles the DELETE request in the given CoAPExchange.
+	 * <p>
+	 * By default it responds with a 4.05 (Method Not Allowed). Override this
+	 * method to respond differently to DELETE requests. The response code to a
+	 * DELETE request should be a Deleted (2.02).
 	 *
 	 * @param exchange the CoapExchange for the simple API
 	 */
@@ -335,10 +374,11 @@ public class CoapResource implements Resource, ObservableResource {
 	}
 
 	/**
-	 * Handles the FETCH request in the given CoAPExchange. By default it
-	 * responds with a 4.05 (Method Not Allowed). Override this method to
-	 * respond differently to FETCH requests. The response code to a FETCH
-	 * request should be a Content (2.05).
+	 * Handles the FETCH request in the given CoAPExchange.
+	 * <p>
+	 * By default it responds with a 4.05 (Method Not Allowed). Override this
+	 * method to respond differently to FETCH requests. The response code to a
+	 * FETCH request should be a Content (2.05).
 	 *
 	 * @param exchange the CoapExchange for the simple API
 	 */
@@ -347,8 +387,9 @@ public class CoapResource implements Resource, ObservableResource {
 	}
 
 	/**
-	 * Handles the PATCH request in the given CoAPExchange (not idempotent). By
-	 * default it responds with a 4.05 (Method Not Allowed). Override this
+	 * Handles the PATCH request in the given CoAPExchange (not idempotent).
+	 * <p>
+	 * By default it responds with a 4.05 (Method Not Allowed). Override this
 	 * method to respond differently to PATCH requests. The response code to a
 	 * PATCH requests are Created (2.01) and Changed (2.04).
 	 *
@@ -359,8 +400,9 @@ public class CoapResource implements Resource, ObservableResource {
 	}
 
 	/**
-	 * Handles the IPATCH request in the given CoAPExchange (idempotent). By
-	 * default it responds with a 4.05 (Method Not Allowed). Override this
+	 * Handles the IPATCH request in the given CoAPExchange (idempotent).
+	 * <p>
+	 * By default it responds with a 4.05 (Method Not Allowed). Override this
 	 * method to respond differently to IPATCH requests. The response code to a
 	 * IPATCH requests are Created (2.01) and Changed (2.04).
 	 *
@@ -380,35 +422,6 @@ public class CoapResource implements Resource, ObservableResource {
 		return notificationOrderer.getCurrent();
 	}
 
-	/**
-	 * This method is used to apply resource-specific knowledge on the exchange.
-	 * If the request was successful, it sets the Observe option for the
-	 * response. It is important to use the notificationOrderer of the resource
-	 * here. Further down the layer, race conditions could cause local
-	 * reordering of notifications. If the response has an error code, no
-	 * observe relation can be established and if there was one previously it is
-	 * canceled. When this resource allows to be observed by clients and the
-	 * request is a GET request with an observe option, the
-	 * {@link ServerMessageDeliverer} already created the relation, as it
-	 * manages the observing endpoints globally.
-	 * 
-	 * @param exchange the exchange
-	 * @param response the response
-	 * @deprecated moved to
-	 *             {@link ObserveRelation#onResponse(ObserveRelation, Response)}
-	 */
-	@Deprecated
-	public void checkObserveRelation(Exchange exchange, Response response) {
-		ObserveRelation.onResponse(exchange.getRelation(), response);
-	}
-
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see
-	 * org.eclipse.californium.core.server.resources.Resource#add(org.eclipse.
-	 * californium.core.server.resources.Resource)
-	 */
 	@Override
 	public synchronized void add(Resource child) {
 		if (child.getName() == null) {
@@ -433,9 +446,10 @@ public class CoapResource implements Resource, ObservableResource {
 	}
 
 	/**
-	 * Adds the specified resource as child. This method is syntactic sugar to
-	 * have a fluent-interface when adding resources to a tree. For instance,
-	 * consider the following example:
+	 * Adds the specified resource as child.
+	 * <p>
+	 * This method is syntactic sugar to have a fluent-interface when adding
+	 * resources to a tree. For instance, consider the following example:
 	 * 
 	 * <pre>
 	 * server.add(new CoapResource("foo")
@@ -453,9 +467,10 @@ public class CoapResource implements Resource, ObservableResource {
 	}
 
 	/**
-	 * Adds the specified resource as child. This method is syntactic sugar to
-	 * have a fluent-interface when adding resources to a tree. For instance,
-	 * consider the following example:
+	 * Adds the specified resource as child.
+	 * <p>
+	 * This method is syntactic sugar to have a fluent-interface when adding
+	 * resources to a tree. For instance, consider the following example:
 	 * 
 	 * <pre>
 	 * server.add(new CoapResource("foo").add(new CoapResource("a").add(new CoapResource("a1"), new CoapResource("a2"),
@@ -472,13 +487,6 @@ public class CoapResource implements Resource, ObservableResource {
 		return this;
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see
-	 * org.eclipse.californium.core.server.resources.Resource#delete(org.eclipse
-	 * .californium.core.server.resources.Resource)
-	 */
 	@Override
 	public synchronized boolean delete(Resource child) {
 		if (child.getParent() == this) {
@@ -511,7 +519,7 @@ public class CoapResource implements Resource, ObservableResource {
 
 	/**
 	 * Cancel all observe relations to CoAP clients.
-	 * 
+	 * <p>
 	 * The relations are canceled asynchronous using
 	 * {@link Exchange#execute(Runnable)}. Therefore the relations may still be
 	 * valid after returning, but the will be canceled afterwards.
@@ -525,7 +533,7 @@ public class CoapResource implements Resource, ObservableResource {
 	/**
 	 * Remove all observe relations to CoAP clients and notify them that the
 	 * observe relation has been canceled.
-	 * 
+	 * <p>
 	 * The relations are canceled asynchronous using
 	 * {@link Exchange#execute(Runnable)}. Therefore the relations may still be
 	 * valid after returning, but the will be canceled afterwards.
@@ -543,7 +551,7 @@ public class CoapResource implements Resource, ObservableResource {
 	/**
 	 * Remove all observe relations to CoAP clients and notify them that the
 	 * observe relation has been canceled.
-	 * 
+	 * <p>
 	 * The relations are canceled asynchronous using
 	 * {@link Exchange#execute(Runnable)}. Therefore the relations may still be
 	 * valid after returning, but the will be canceled afterwards.
@@ -556,7 +564,7 @@ public class CoapResource implements Resource, ObservableResource {
 	 * @throws IllegalArgumentException if code is not an error code.
 	 * @since 3.0
 	 */
-	public void clearAndNotifyObserveRelations(final ObserveRelationFilter filter, final ResponseCode code) {
+	public void clearAndNotifyObserveRelations(final Predicate<ObserveRelation> filter, final ResponseCode code) {
 		if (code != null && code.isSuccess()) {
 			throw new IllegalArgumentException(
 					"Only error-responses are supported, not a " + code + "/" + code.name() + "!");
@@ -577,7 +585,7 @@ public class CoapResource implements Resource, ObservableResource {
 				public void run() {
 					ObserveRelation relation = exchange.getRelation();
 					if (relation != null && relation.isEstablished()) {
-						if (code != null && (null == filter || filter.accept(relation))) {
+						if (code != null && (null == filter || filter.test(relation))) {
 							Response response = new Response(code, true);
 							response.setType(Type.CON);
 							exchange.sendResponse(response);
@@ -590,23 +598,12 @@ public class CoapResource implements Resource, ObservableResource {
 		}
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see org.eclipse.californium.core.server.resources.Resource#getParent()
-	 */
 	@Override
 	public Resource getParent() {
 		return parent;
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see
-	 * org.eclipse.californium.core.server.resources.Resource#setParent(org.
-	 * eclipse.californium.core.server.resources.Resource)
-	 */
+	@Override
 	public void setParent(Resource parent) {
 		this.parent = parent;
 		if (parent != null) {
@@ -615,48 +612,21 @@ public class CoapResource implements Resource, ObservableResource {
 		adjustChildrenPath();
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see
-	 * org.eclipse.californium.core.server.resources.Resource#getChild(java.lang
-	 * .String)
-	 */
 	@Override
 	public Resource getChild(String name) {
 		return children.get(name);
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see
-	 * org.eclipse.californium.core.server.resources.Resource#addObserver(org.
-	 * eclipse.californium.core.server.resources.ResourceObserver)
-	 */
 	@Override
 	public void addObserver(ResourceObserver observer) {
 		observers.add(observer);
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see
-	 * org.eclipse.californium.core.server.resources.Resource#removeObserver(org
-	 * .eclipse.californium.core.server.resources.ResourceObserver)
-	 */
 	@Override
 	public void removeObserver(ResourceObserver observer) {
 		observers.remove(observer);
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see
-	 * org.eclipse.californium.core.server.resources.Resource#getAttributes()
-	 */
 	@Override
 	public ResourceAttributes getAttributes() {
 		return attributes;
@@ -672,53 +642,110 @@ public class CoapResource implements Resource, ObservableResource {
 		this.attributes = attributes;
 	}
 
-	/*
-	 * (non-Javadoc)
+	/**
+	 * Get list of supported content formats.
+	 * <p>
+	 * If the list contains at least one content format, requests with an
+	 * {@code ACCEPT} option not contained in the list fails with
+	 * {@code 4.06 Not Acceptable}.
 	 * 
-	 * @see org.eclipse.californium.core.server.resources.Resource#getName()
+	 * @return unmodifiable list of supported content formats
+	 * @since 4.0
 	 */
+	public List<Integer> getSupportedContentFormats() {
+		return Collections.unmodifiableList(supportedContentFormats);
+	}
+
+	/**
+	 * Add content formats to list of supported content formats.
+	 * <p>
+	 * Adds value also to the attribute {@code content-type}. Intended to be
+	 * used for static lists applied to all methods. If single methods needs a
+	 * specific list or a dynamic list of content formats is required, use
+	 * {@link #checkContentFormat(CoapExchange, int...)} instead.
+	 * 
+	 * @param contentFormats content formats to add
+	 * @since 4.0
+	 */
+	public void addSupportedContentFormats(int... contentFormats) {
+		for (int contentFormat : contentFormats) {
+			supportedContentFormats.add(contentFormat);
+			getAttributes().addContentType(contentFormat);
+		}
+	}
+
+	/**
+	 * Checks the exchange to accept one of the supported content formats.
+	 * <p>
+	 * If the list of supported content formats contains at least one content
+	 * format, requests with an {@code ACCEPT} option not contained in the list
+	 * fails with {@code 4.06 Not Acceptable}.
+	 * 
+	 * @param coapExchange the coap exchange with the request
+	 * @return {@code true} if the exchange is acceptable, {@code false}
+	 *         otherwise.
+	 * @since 4.0
+	 */
+	protected boolean checkSupportedContentFormat(CoapExchange coapExchange) {
+		if (!supportedContentFormats.isEmpty()) {
+			int accept = coapExchange.getRequestOptions().getAccept();
+			if (accept != MediaTypeRegistry.UNDEFINED) {
+				if (!supportedContentFormats.contains(accept)) {
+					coapExchange.respond(new Response(ResponseCode.NOT_ACCEPTABLE, true));
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Checks the exchange to accept one of the provided content formats.
+	 * <p>
+	 * Requests with an {@code ACCEPT} option not contained in the provided ones
+	 * fails with {@code 4.06 Not Acceptable}.
+	 * 
+	 * @param coapExchange the coap exchange with the request
+	 * @param contentFormats list of content formats to check
+	 * @return {@code true} if the exchange is acceptable, {@code false}
+	 *         otherwise.
+	 * @since 4.0
+	 */
+	public boolean checkContentFormat(CoapExchange coapExchange, int... contentFormats) {
+		int accept = coapExchange.getRequestOptions().getAccept();
+		if (accept != MediaTypeRegistry.UNDEFINED) {
+			for (int contentFormat : contentFormats) {
+				if (contentFormat == accept) {
+					return true;
+				}
+			}
+			coapExchange.respond(new Response(ResponseCode.NOT_ACCEPTABLE, true));
+			return false;
+		}
+		return true;
+	}
+
 	@Override
 	public String getName() {
 		return name;
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see org.eclipse.californium.core.server.resources.Resource#isCachable()
-	 */
 	@Override
 	public boolean isCachable() {
 		return true;
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see org.eclipse.californium.core.server.resources.Resource#getPath()
-	 */
 	@Override
 	public String getPath() {
 		return path;
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see org.eclipse.californium.core.server.resources.Resource#getURI()
-	 */
 	@Override
 	public String getURI() {
 		return getPath() + getName();
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see
-	 * org.eclipse.californium.core.server.resources.Resource#setPath(java.lang.
-	 * String)
-	 */
+	@Override
 	public synchronized void setPath(String path) {
 		final String old = this.path;
 		this.path = path;
@@ -728,15 +755,12 @@ public class CoapResource implements Resource, ObservableResource {
 		adjustChildrenPath();
 	}
 
-	// If the parent already has a child with that name, the behavior is
-	// undefined
-	/*
-	 * (non-Javadoc)
+	/**
+	 * {@inheritDoc}
 	 * 
-	 * @see
-	 * org.eclipse.californium.core.server.resources.Resource#setName(java.lang.
-	 * String)
+	 * If the parent already has a child with that name, this will be removed.
 	 */
+	@Override
 	public synchronized void setName(String name) {
 		if (name == null) {
 			throw new NullPointerException("name must not be null!");
@@ -765,9 +789,10 @@ public class CoapResource implements Resource, ObservableResource {
 	}
 
 	/**
-	 * Adjust the path of all children. This method is invoked when the URI of
-	 * this resource has changed, e.g., if its name or the name of an ancestor
-	 * has changed.
+	 * Adjust the path of all children.
+	 * <p>
+	 * This method is invoked when the URI of this resource has changed, e.g.,
+	 * if its name or the name of an ancestor has changed.
 	 */
 	private void adjustChildrenPath() {
 		String childpath = path + name + /* since 23.7.2013 */ "/";
@@ -776,11 +801,6 @@ public class CoapResource implements Resource, ObservableResource {
 		}
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see org.eclipse.californium.core.server.resources.Resource#isVisible()
-	 */
 	@Override
 	public boolean isVisible() {
 		return visible;
@@ -795,12 +815,6 @@ public class CoapResource implements Resource, ObservableResource {
 		this.visible = visible;
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see
-	 * org.eclipse.californium.core.server.resources.Resource#isObservable()
-	 */
 	@Override
 	public boolean isObservable() {
 		return observable;
@@ -822,7 +836,7 @@ public class CoapResource implements Resource, ObservableResource {
 
 	/**
 	 * Sets the type of the notifications that will be sent.
-	 * 
+	 * <p>
 	 * If set to {@code null} (default) the type matching the request will be
 	 * used.
 	 *
@@ -839,13 +853,6 @@ public class CoapResource implements Resource, ObservableResource {
 		this.observeType = type;
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see
-	 * org.eclipse.californium.core.server.resources.Resource#addObserveRelation
-	 * (org.eclipse.californium.core.observe.ObserveRelation)
-	 */
 	@Override
 	public void addObserveRelation(ObserveRelation relation) {
 		observeRelations.add(relation);
@@ -856,13 +863,6 @@ public class CoapResource implements Resource, ObservableResource {
 		}
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see org.eclipse.californium.core.server.resources.Resource#
-	 * removeObserveRelation(org.eclipse.californium.core.observe.
-	 * ObserveRelation)
-	 */
 	@Override
 	public void removeObserveRelation(ObserveRelation relation) {
 		if (observeRelations.remove(relation)) {
@@ -882,13 +882,15 @@ public class CoapResource implements Resource, ObservableResource {
 	/**
 	 * Notifies all CoAP clients that have established an observe relation with
 	 * this resource that the state has changed by reprocessing their original
-	 * request that has established the relation. The notification is done by
-	 * the executor of this resource or on the executor of its parent or
-	 * transitively ancestor. If no ancestor defines its own executor, the
-	 * thread that has called this method performs the notification.
-	 * 
-	 * Note: this implementation is not intended to be used as "history" or
-	 * "time sequence" function. If {@link #changed()} is called while an
+	 * request that has established the relation.
+	 * <p>
+	 * The notification is done by the executor of this resource or on the
+	 * executor of its parent or transitively ancestor. If no ancestor defines
+	 * its own executor, the thread that has called this method performs the
+	 * notification.
+	 * <p>
+	 * <b>Note:</b> this implementation is not intended to be used as "history"
+	 * or "time sequence" function. If {@link #changed()} is called while an
 	 * execution is already pending, the outcome is undefined. It's only
 	 * ensured, that the last change will be transmitted. That will especially
 	 * occur, if resources are intended to change fast.
@@ -905,14 +907,15 @@ public class CoapResource implements Resource, ObservableResource {
 	/**
 	 * Notifies a filtered set of CoAP clients that have established an observe
 	 * relation with this resource that the state has changed by reprocessing
-	 * their original request that has established the relation. The
-	 * notification is done by the executor of this resource or on the executor
-	 * of its parent or transitively ancestor. If no ancestor defines its own
-	 * executor, the thread that has called this method performs the
+	 * their original request that has established the relation.
+	 * <p>
+	 * The notification is done by the executor of this resource or on the
+	 * executor of its parent or transitively ancestor. If no ancestor defines
+	 * its own executor, the thread that has called this method performs the
 	 * notification.
-	 * 
-	 * Note: this implementation is not intended to be used as "history" or
-	 * "time sequence" function. If {@link #changed()} is called while an
+	 * <p>
+	 * <b>Note:</b> this implementation is not intended to be used as "history"
+	 * or "time sequence" function. If {@link #changed()} is called while an
 	 * execution is already pending, the outcome is undefined. It's only
 	 * ensured, that the last change will be transmitted. That will especially
 	 * occur, if resources are intended to change fast.
@@ -923,7 +926,7 @@ public class CoapResource implements Resource, ObservableResource {
 	 *             current thread (without executor).
 	 * @see #changed()
 	 */
-	public void changed(final ObserveRelationFilter filter) {
+	public void changed(final Predicate<ObserveRelation> filter) {
 		final Executor executor = getExecutor();
 		if (executor == null) {
 			// use thread from the protocol stage
@@ -957,30 +960,21 @@ public class CoapResource implements Resource, ObservableResource {
 	 * @param filter filter to select set of relations. {@code null}, if all
 	 *            clients should be notified.
 	 */
-	protected void notifyObserverRelations(final ObserveRelationFilter filter) {
+	protected void notifyObserverRelations(final Predicate<ObserveRelation> filter) {
 		notificationOrderer.getNextObserveNumber();
 		for (ObserveRelation relation : observeRelations) {
-			if (null == filter || filter.accept(relation)) {
+			if (null == filter || filter.test(relation)) {
 				handleRequest(relation.getExchange());
 			}
 		}
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see org.eclipse.californium.core.server.resources.Resource#getChildren()
-	 */
-	@Override // should be used for read-only
+	@Override
 	public Collection<Resource> getChildren() {
 		return children.values();
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * 
-	 * @see org.eclipse.californium.core.server.resources.Resource#getExecutor()
-	 */
+	@Override
 	public Executor getExecutor() {
 		final Resource parent = getParent();
 		return parent != null ? parent.getExecutor() : null;
@@ -988,8 +982,10 @@ public class CoapResource implements Resource, ObservableResource {
 
 	/**
 	 * Execute an arbitrary task on the executor of this resource or the first
-	 * parent that defines its own executor. If no parent defines an executor,
-	 * the thread that calls this method executes the specified task.
+	 * parent that defines its own executor.
+	 * <p>
+	 * If no parent defines an executor, the thread that calls this method
+	 * executes the specified task.
 	 * 
 	 * @param task the task
 	 */
@@ -1007,8 +1003,10 @@ public class CoapResource implements Resource, ObservableResource {
 	/**
 	 * Execute an arbitrary task on the executor of this resource or the first
 	 * parent that defines its own executor and wait until it the task is
-	 * completed. If no parent defines an executor, the thread that calls this
-	 * method executes the specified task.
+	 * completed.
+	 * <p>
+	 * If no parent defines an executor, the thread that calls this method
+	 * executes the specified task.
 	 * 
 	 * @param task the task
 	 * @throws InterruptedException the interrupted exception

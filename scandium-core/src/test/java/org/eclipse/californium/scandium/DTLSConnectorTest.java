@@ -66,10 +66,10 @@ import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.californium.elements.AddressEndpointContext;
@@ -85,14 +85,14 @@ import org.eclipse.californium.elements.util.Bytes;
 import org.eclipse.californium.elements.util.DatagramReader;
 import org.eclipse.californium.elements.util.DatagramWriter;
 import org.eclipse.californium.elements.util.ExecutorsUtil;
+import org.eclipse.californium.elements.util.ProtocolScheduledExecutorService;
 import org.eclipse.californium.elements.util.SimpleMessageCallback;
-import org.eclipse.californium.elements.util.StandardCharsets;
 import org.eclipse.californium.elements.util.TestThreadFactory;
+import org.eclipse.californium.scandium.ConnectorHelper.AlertCatcher;
 import org.eclipse.californium.scandium.ConnectorHelper.LatchDecrementingRawDataChannel;
 import org.eclipse.californium.scandium.ConnectorHelper.LatchSessionListener;
 import org.eclipse.californium.scandium.ConnectorHelper.RecordCollectorDataHandler;
 import org.eclipse.californium.scandium.ConnectorHelper.TestContext;
-import org.eclipse.californium.scandium.ConnectorHelper.AlertCatcher;
 import org.eclipse.californium.scandium.ConnectorHelper.UdpConnector;
 import org.eclipse.californium.scandium.config.DtlsConfig;
 import org.eclipse.californium.scandium.config.DtlsConnectorConfig;
@@ -117,19 +117,18 @@ import org.eclipse.californium.scandium.dtls.Handshaker;
 import org.eclipse.californium.scandium.dtls.HelloRequest;
 import org.eclipse.californium.scandium.dtls.HelloVerifyRequest;
 import org.eclipse.californium.scandium.dtls.InMemoryConnectionStore;
-import org.eclipse.californium.scandium.dtls.InMemoryReadWriteLockConnectionStore;
 import org.eclipse.californium.scandium.dtls.PSKClientKeyExchange;
 import org.eclipse.californium.scandium.dtls.ProtocolVersion;
 import org.eclipse.californium.scandium.dtls.PskPublicInformation;
 import org.eclipse.californium.scandium.dtls.Record;
-import org.eclipse.californium.scandium.dtls.ResumptionSupportingConnectionStore;
+import org.eclipse.californium.scandium.dtls.ConnectionStore;
 import org.eclipse.californium.scandium.dtls.SessionId;
 import org.eclipse.californium.scandium.dtls.cipher.CipherSuite;
-import org.eclipse.californium.scandium.dtls.pskstore.AdvancedPskStore;
-import org.eclipse.californium.scandium.dtls.pskstore.AdvancedSinglePskStore;
-import org.eclipse.californium.scandium.dtls.x509.NewAdvancedCertificateVerifier;
+import org.eclipse.californium.scandium.dtls.pskstore.PskStore;
+import org.eclipse.californium.scandium.dtls.pskstore.SinglePskStore;
+import org.eclipse.californium.scandium.dtls.x509.CertificateVerifier;
 import org.eclipse.californium.scandium.dtls.x509.SingleCertificateProvider;
-import org.eclipse.californium.scandium.dtls.x509.StaticNewAdvancedCertificateVerifier;
+import org.eclipse.californium.scandium.dtls.x509.StaticCertificateVerifier;
 import org.eclipse.californium.scandium.rule.DtlsNetworkRule;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -173,23 +172,23 @@ public class DTLSConnectorTest {
 	private static final int MAX_TIME_TO_WAIT_SECS = 2;
 
 	private static ConnectorHelper serverHelper;
-	private static ExecutorService executor;
+	private static ProtocolScheduledExecutorService executor;
 
 	DtlsConnectorConfig clientConfig;
 	DTLSConnector client;
 	TestContext clientTestContext;
 	DTLSContext establishedClientContext;
-	ResumptionSupportingConnectionStore clientConnectionStore;
+	ConnectionStore clientConnectionStore;
 
 	@BeforeClass
 	public static void loadKeys() throws IOException, GeneralSecurityException {
 
-		executor = ExecutorsUtil.newFixedThreadPool(2, new TestThreadFactory("DTLS-"));
+		executor = ExecutorsUtil.newProtocolScheduledThreadPool(2, new TestThreadFactory("DTLS-"));
 
-		AdvancedSinglePskStore pskStore = new AdvancedSinglePskStore(CLIENT_IDENTITY,
+		SinglePskStore pskStore = new SinglePskStore(CLIENT_IDENTITY,
 				CLIENT_IDENTITY_SECRET.getBytes());
 
-		NewAdvancedCertificateVerifier verifier = StaticNewAdvancedCertificateVerifier.builder()
+		CertificateVerifier verifier = StaticCertificateVerifier.builder()
 				.setTrustedCertificates(DtlsTestTools.getTrustedCertificates()).setTrustAllRPKs().build();
 
 		serverHelper = new ConnectorHelper(network);
@@ -203,7 +202,7 @@ public class DTLSConnectorTest {
 				.setAsList(DtlsConfig.DTLS_CIPHER_SUITES, CipherSuite.TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8,
 						CipherSuite.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256, CipherSuite.TLS_PSK_WITH_AES_128_CCM_8,
 						CipherSuite.TLS_PSK_WITH_AES_128_CBC_SHA256, CipherSuite.TLS_ECDHE_PSK_WITH_AES_128_CBC_SHA256)
-				.setAdvancedCertificateVerifier(verifier).setAdvancedPskStore(pskStore);
+				.setCertificateVerifier(verifier).setPskStore(pskStore);
 		serverHelper.startServer();
 	}
 
@@ -236,7 +235,7 @@ public class DTLSConnectorTest {
 	}
 
 	private static DtlsConnectorConfig.Builder newClientConfigBuilder() throws Exception {
-		NewAdvancedCertificateVerifier verifier = StaticNewAdvancedCertificateVerifier.builder()
+		CertificateVerifier verifier = StaticCertificateVerifier.builder()
 				.setTrustedCertificates(DtlsTestTools.getTrustedCertificates()).setTrustAllRPKs().build();
 		return DtlsConnectorConfig.builder(network.createClientTestConfig())
 				.set(DtlsConfig.DTLS_MAX_CONNECTIONS, CLIENT_CONNECTION_STORE_CAPACITY)
@@ -247,7 +246,7 @@ public class DTLSConnectorTest {
 				.setCertificateIdentityProvider(new SingleCertificateProvider(DtlsTestTools.getClientPrivateKey(),
 						DtlsTestTools.getClientCertificateChain(), CertificateType.RAW_PUBLIC_KEY,
 						CertificateType.X_509))
-				.setAdvancedCertificateVerifier(verifier);
+				.setCertificateVerifier(verifier);
 	}
 
 	@Test
@@ -718,7 +717,7 @@ public class DTLSConnectorTest {
 		// the same IP address and port again
 		clientTestContext.setLatchCount(1);
 		DtlsConnectorConfig clientConfig = newClientConfigBuilder().setAddress(clientTestContext.getClientAddress()).build();
-		ResumptionSupportingConnectionStore clientConnectionStore = ConnectorHelper.createDebugConnectionStore(clientConfig);
+		ConnectionStore clientConnectionStore = ConnectorHelper.createDebugConnectionStore(clientConfig);
 		client = new DTLSConnector(clientConfig, clientConnectionStore);
 		client.setRawDataReceiver(clientTestContext.getChannel());
 		client.setExecutor(executor);
@@ -1056,10 +1055,9 @@ public class DTLSConnectorTest {
 		assertThat(connection.hasEstablishedDtlsContext(), is(true));
 	}
 
-	@SuppressWarnings("deprecation")
 	@Test
 	public void testConnectorTerminatesHandshakeIfConnectionStoreIsExhausted() throws Exception {
-		logging.setLoggingLevel("ERROR", InMemoryConnectionStore.class, InMemoryReadWriteLockConnectionStore.class);
+		logging.setLoggingLevel("ERROR", InMemoryConnectionStore.class);
 		serverHelper.serverConnectionStore.clear();
 		assertEquals(SERVER_CONNECTION_STORE_CAPACITY, serverHelper.serverConnectionStore.remainingCapacity());
 		assertTrue(serverHelper.serverConnectionStore.put(new Connection(new InetSocketAddress("192.168.0.1", 5050))
@@ -1089,7 +1087,7 @@ public class DTLSConnectorTest {
 	@Test
 	public void testConnectorIgnoresUnknownPskIdentity() throws Exception {
 		ensureConnectorIgnoresBadCredentials(
-				new AdvancedSinglePskStore("unknownIdentity", CLIENT_IDENTITY_SECRET.getBytes()));
+				new SinglePskStore("unknownIdentity", CLIENT_IDENTITY_SECRET.getBytes()));
 		AlertMessage alert = serverHelper.serverAlertCatcher.waitForEvent(2, TimeUnit.SECONDS);
 		assertThat("server side internal alert", alert,
 				is(new AlertMessage(AlertLevel.FATAL, AlertDescription.UNKNOWN_PSK_IDENTITY)));
@@ -1100,10 +1098,10 @@ public class DTLSConnectorTest {
 	 */
 	@Test
 	public void testConnectorIgnoresBadPsk() throws Exception {
-		ensureConnectorIgnoresBadCredentials(new AdvancedSinglePskStore(CLIENT_IDENTITY, "bad_psk".getBytes()));
+		ensureConnectorIgnoresBadCredentials(new SinglePskStore(CLIENT_IDENTITY, "bad_psk".getBytes()));
 	}
 
-	private void ensureConnectorIgnoresBadCredentials(AdvancedPskStore pskStoreWithBadCredentials) throws Exception {
+	private void ensureConnectorIgnoresBadCredentials(PskStore pskStoreWithBadCredentials) throws Exception {
 		if (client != null) {
 			client.destroy();
 		}
@@ -1113,7 +1111,7 @@ public class DTLSConnectorTest {
 				.setLoggingTag("client").setAddress(LOCAL)
 				.set(DtlsConfig.DTLS_RETRANSMISSION_TIMEOUT, 250, TimeUnit.MILLISECONDS)
 				.set(DtlsConfig.DTLS_MAX_RETRANSMISSIONS, 1)
-				.setAdvancedPskStore(pskStoreWithBadCredentials).build();
+				.setPskStore(pskStoreWithBadCredentials).build();
 		client = serverHelper.createClient(clientConfig);
 		client.start();
 		SimpleMessageCallback callback = new SimpleMessageCallback();
@@ -1202,7 +1200,7 @@ public class DTLSConnectorTest {
 
 		// send a CLIENT_HELLO message to the server to renegotiation connection
 		Record record = new Record(ContentType.HANDSHAKE, establishedClientContext.getWriteEpoch(), createClientHello(),
-				establishedClientContext, false, 0);
+				establishedClientContext, establishedClientContext.getWriteConnectionId() != null, 0);
 		record.setAddress(serverHelper.serverEndpoint, null);
 		client.sendRecord(record);
 
@@ -1218,8 +1216,9 @@ public class DTLSConnectorTest {
 
 		// send a HELLO_REQUEST message to the client
 		DTLSContext context = clientTestContext.getEstablishedServerContext();
+		
 		Record record = new Record(ContentType.HANDSHAKE, context.getWriteEpoch(),
-				new HelloRequest(), context, false, 0);
+				new HelloRequest(), context, context.getWriteConnectionId() != null, 0);
 		record.setAddress(clientTestContext.getClientAddress(), null);
 		serverHelper.server.sendRecord(record);
 

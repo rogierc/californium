@@ -8,7 +8,7 @@
 	<parent>
 		<groupId>org.eclipse.californium</groupId>
 		<artifactId>cf-bom</artifactId>
-		<version>3.13.0-SNAPSHOT</version>
+		<version>4.0.0-SNAPSHOT</version>
 		<relativePath>../bom</relativePath>
 	</parent>
 	<artifactId>demo-apps</artifactId>
@@ -18,8 +18,6 @@
 	<description>Demo applications illustrating Californium's features that can be run from the command line.</description>
 
 	<modules>
-		<module>cf-benchmark</module>
-		<module>cf-benchmark-observe</module>
 		<module>cf-cocoa</module>
 		<module>cf-extplugtest-client</module>
 		<module>cf-extplugtest-server</module>
@@ -49,6 +47,11 @@
 			deploy this module's artifacts to Maven Central' staging repo
 		 -->
 		<skipStaging>true</skipStaging>
+		<!-- 
+			this property prevents the central-publishing-maven-plugin to
+			deploy this module's artifacts to Maven Central' staging repo
+		 -->
+		<skipPublishing>true</skipPublishing>
 		<!-- 
 			never create JavaDoc for this module
 		 -->

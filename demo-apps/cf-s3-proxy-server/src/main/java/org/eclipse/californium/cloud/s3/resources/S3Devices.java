@@ -20,7 +20,6 @@ import static org.eclipse.californium.core.coap.CoAP.ResponseCode.CONTENT;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.FORBIDDEN;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.INTERNAL_SERVER_ERROR;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.NOT_ACCEPTABLE;
-import static org.eclipse.californium.core.coap.CoAP.ResponseCode.UNAUTHORIZED;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.APPLICATION_CBOR;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.APPLICATION_JAVASCRIPT;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.APPLICATION_JSON;
@@ -30,14 +29,13 @@ import static org.eclipse.californium.core.coap.MediaTypeRegistry.APPLICATION_XM
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.TEXT_PLAIN;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.UNDEFINED;
 
-import java.net.URI;
 import java.security.Principal;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -48,37 +46,44 @@ import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
 import java.util.function.Consumer;
 
 import org.eclipse.californium.cloud.BaseServer;
-import org.eclipse.californium.cloud.option.ReadEtagOption;
-import org.eclipse.californium.cloud.option.ReadResponseOption;
+import org.eclipse.californium.cloud.option.ResponseCodeOption;
+import org.eclipse.californium.cloud.option.ServerCustomOptions;
 import org.eclipse.californium.cloud.option.TimeOption;
-import org.eclipse.californium.cloud.s3.option.ForwardResponseOption;
-import org.eclipse.californium.cloud.s3.proxy.S3AsyncProxyClient;
+import org.eclipse.californium.cloud.resources.ProtectedCoapResource;
+import org.eclipse.californium.cloud.s3.forward.HttpForwardConfiguration;
+import org.eclipse.californium.cloud.s3.forward.HttpForwardConfigurationProvider;
+import org.eclipse.californium.cloud.s3.forward.HttpForwardService;
+import org.eclipse.californium.cloud.s3.forward.HttpForwardServiceManager;
+import org.eclipse.californium.cloud.s3.option.S3ProxyCustomOptions;
 import org.eclipse.californium.cloud.s3.proxy.S3ProxyClient;
 import org.eclipse.californium.cloud.s3.proxy.S3ProxyClientProvider;
 import org.eclipse.californium.cloud.s3.proxy.S3ProxyRequest;
-import org.eclipse.californium.cloud.s3.util.DomainDeviceManager;
-import org.eclipse.californium.cloud.s3.util.DomainDeviceManager.DomainDeviceInfo;
-import org.eclipse.californium.cloud.s3.util.HttpForwardDestinationProvider;
-import org.eclipse.californium.cloud.s3.util.HttpForwardDestinationProvider.DeviceIdentityMode;
+import org.eclipse.californium.cloud.s3.proxy.S3ProxyRequest.Builder;
+import org.eclipse.californium.cloud.s3.util.DomainApplicationAnonymous;
+import org.eclipse.californium.cloud.s3.util.DomainPrincipalInfo;
+import org.eclipse.californium.cloud.s3.util.MultiConsumer;
+import org.eclipse.californium.cloud.util.PrincipalInfo;
+import org.eclipse.californium.cloud.util.PrincipalInfo.Type;
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.WebLink;
+import org.eclipse.californium.core.coap.CoAP.Code;
+import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.coap.LinkFormat;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
 import org.eclipse.californium.core.coap.Option;
 import org.eclipse.californium.core.coap.OptionSet;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
-import org.eclipse.californium.core.coap.ResponseConsumer;
 import org.eclipse.californium.core.coap.UriQueryParameter;
-import org.eclipse.californium.core.server.resources.CoapExchange;
+import org.eclipse.californium.core.coap.option.OpaqueOption;
+import org.eclipse.californium.core.network.Exchange;
 import org.eclipse.californium.core.server.resources.Resource;
 import org.eclipse.californium.core.server.resources.ResourceAttributes;
+import org.eclipse.californium.elements.auth.ApplicationAuthorizer;
 import org.eclipse.californium.elements.config.Configuration;
-import org.eclipse.californium.elements.util.Bytes;
 import org.eclipse.californium.elements.util.LeastRecentlyUpdatedCache;
-import org.eclipse.californium.elements.util.StandardCharsets;
 import org.eclipse.californium.elements.util.StringUtil;
-import org.eclipse.californium.proxy2.http.Coap2HttpProxy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -87,7 +92,6 @@ import org.slf4j.LoggerFactory;
  * <p>
  * Keeps the content of POST request as sub-resource using the principal's name
  * and domain as path of the sub-resource. e.g.:
- * </p>
  * 
  * <code>
  * coaps://${host}/devices POST "Hi!" by principal "Client_identity"
@@ -95,7 +99,6 @@ import org.slf4j.LoggerFactory;
  * 
  * <p>
  * results in a resource:
- * </p>
  * 
  * <code>
  * "/devices/${device-domain}/Client_identity" with content "Hi!".
@@ -109,7 +112,6 @@ import org.slf4j.LoggerFactory;
  * 
  * <p>
  * Supported content types:
- * </p>
  * 
  * <ul>
  * <li>{@link MediaTypeRegistry#TEXT_PLAIN}</li>
@@ -124,11 +126,9 @@ import org.slf4j.LoggerFactory;
  * For GET, {@link MediaTypeRegistry#APPLICATION_LINK_FORMAT} is also supported
  * and returns a list of web-links for the current devices with public access
  * (ACL).
- * </p>
  * 
  * <p>
  * Supported query parameter:
- * </p>
  * 
  * <dl>
  * <dt>{@value #URI_QUERY_OPTION_ACL}</dt>
@@ -146,21 +146,21 @@ import org.slf4j.LoggerFactory;
  * 
  * <p>
  * Supported custom options:
- * </p>
  * 
  * <dl>
  * <dt>{@link TimeOption}, {@value TimeOption#COAP_OPTION_TIME}</dt>
  * <dd>Time synchronization.</dd>
- * <dt>{@link ReadResponseOption},
- * {@value ReadResponseOption#COAP_OPTION_READ_RESPONSE}</dt>
+ * <dt>{@link ResponseCodeOption},
+ * {@value ServerCustomOptions#COAP_OPTION_READ_RESPONSE}</dt>
  * <dd>Response code of piggybacked read request. See query parameter
  * {@value #URI_QUERY_OPTION_READ}</dd>
- * <dt>{@link ReadEtagOption},
- * {@value ReadEtagOption#COAP_OPTION_READ_ETAG}</dt>
+ * <dt>{@link OpaqueOption},
+ * {@value ServerCustomOptions#COAP_OPTION_READ_ETAG}</dt>
  * <dd>ETAG of piggybacked read request. See query parameter
  * {@value #URI_QUERY_OPTION_READ}</dd>
  * </dl>
  * 
+ * <p>
  * Example:
  * 
  * <code>
@@ -170,7 +170,6 @@ import org.slf4j.LoggerFactory;
  * 
  * <p>
  * results in a S3 resource:
- * </p>
  * 
  * <code>
  * s3://${weather-bucket}/devices/dev-1200045/2022-11-03/17:14:46.645" with content "Temperature: 25.4°".
@@ -180,7 +179,6 @@ import org.slf4j.LoggerFactory;
  * (Default for "write" argument is "${date}/${time}".)
  * 
  * and returns the content of
- * </p>
  * 
  * <code>
  * s3://${weather-bucket}/devices/dev-1200045/config".
@@ -188,11 +186,10 @@ import org.slf4j.LoggerFactory;
  * 
  * <p>
  * (Default for "read" argument is "config".)
- * </p>
  * 
  * @since 3.12
  */
-public class S3Devices extends CoapResource {
+public class S3Devices extends ProtectedCoapResource {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(S3Devices.class);
 
@@ -221,7 +218,8 @@ public class S3Devices extends CoapResource {
 	 */
 	public static final String URI_QUERY_OPTION_WRITE = "write";
 	/**
-	 * URI query parameter to append some lines to a series-resource.
+	 * URI query parameter to append some lines to a series-resource. Obsolete.
+	 * Only used to not break communication of devices in field.
 	 */
 	public static final String URI_QUERY_OPTION_SERIES = "series";
 	/**
@@ -244,23 +242,22 @@ public class S3Devices extends CoapResource {
 
 	private final S3ProxyClientProvider s3Clients;
 
-	private final Coap2HttpProxy httpForward;
-
-	private final HttpForwardDestinationProvider httpDestination;
+	private final HttpForwardConfigurationProvider httpForwardConfigurationProvider;
 
 	private final int[] CONTENT_TYPES = { TEXT_PLAIN, APPLICATION_OCTET_STREAM, APPLICATION_JSON, APPLICATION_CBOR,
 			APPLICATION_XML, APPLICATION_JAVASCRIPT, APPLICATION_LINK_FORMAT };
 
 	/**
-	 * Create devices resource.
+	 * Creates devices resource.
 	 * 
 	 * @param config configuration
 	 * @param s3Clients s3 client to persist the requests.
-	 * @param httpDestination http destination to forward requests.
+	 * @param httpForwardConfigurationProvider http forward configuration
+	 *            provider.
 	 */
 	public S3Devices(Configuration config, S3ProxyClientProvider s3Clients,
-			HttpForwardDestinationProvider httpDestination) {
-		super(RESOURCE_NAME);
+			HttpForwardConfigurationProvider httpForwardConfigurationProvider) {
+		super(RESOURCE_NAME, Type.DEVICE, Type.ANONYMOUS_DEVICE, Type.APPL_AUTH_DEVICE);
 		if (s3Clients == null) {
 			throw new NullPointerException("s3client must not be null!");
 		}
@@ -271,13 +268,18 @@ public class S3Devices extends CoapResource {
 		maxDevices = config.get(BaseServer.CACHE_MAX_DEVICES);
 		domains = new ConcurrentHashMap<>();
 		this.s3Clients = s3Clients;
-		Coap2HttpProxy http = null;
-		if (httpDestination != null) {
-			http = new Coap2HttpProxy(null);
-			LOGGER.info("Forward to http enabled.");
+		this.httpForwardConfigurationProvider = httpForwardConfigurationProvider;
+	}
+
+	@Override
+	protected ResponseCode checkOperationPermission(PrincipalInfo info, Exchange exchange, boolean write) {
+		if (info.type == Type.DEVICE || info.type == Type.APPL_AUTH_DEVICE) {
+			return null;
 		}
-		this.httpForward = http;
-		this.httpDestination = httpDestination;
+		if (info.type == Type.ANONYMOUS_DEVICE && exchange.getRequest().getCode() == Code.POST) {
+			return null;
+		}
+		return FORBIDDEN;
 	}
 
 	@Override
@@ -307,60 +309,45 @@ public class S3Devices extends CoapResource {
 		if (accept != UNDEFINED && accept != APPLICATION_LINK_FORMAT) {
 			exchange.respond(NOT_ACCEPTABLE);
 		} else {
-			final Principal principal = request.getSourceContext().getPeerIdentity();
-			final DomainDeviceInfo info = DomainDeviceManager.getDeviceInfo(principal);
-			if (info == null) {
-				exchange.respond(UNAUTHORIZED);
-			} else {
-				List<String> query = exchange.getRequestOptions().getUriQuery();
-				if (query.size() > 1) {
-					exchange.respond(BAD_OPTION, "only one search query is supported!", TEXT_PLAIN);
-					return;
-				}
-				Set<WebLink> subTree = new ConcurrentSkipListSet<>();
-				Resource resource = domains.get(info.domain);
-				if (resource != null) {
-					LinkFormat.addSubTree(resource, query, subTree);
-				}
-				Response response = new Response(CONTENT);
-				response.setPayload(LinkFormat.serialize(subTree));
-				response.getOptions().setContentFormat(APPLICATION_LINK_FORMAT);
-				exchange.respond(response);
+			final String domain = DomainPrincipalInfo.getDomain(getPrincipal(exchange));
+			List<String> query = exchange.getRequestOptions().getUriQueryStrings();
+			if (query.size() > 1) {
+				exchange.respond(BAD_OPTION, "only one search query is supported!", TEXT_PLAIN);
+				return;
 			}
+			Set<WebLink> subTree = new ConcurrentSkipListSet<>();
+			Resource resource = domains.get(domain);
+			if (resource != null) {
+				LinkFormat.addSubTree(resource, query, subTree);
+			}
+			Response response = new Response(CONTENT);
+			response.setPayload(LinkFormat.serialize(subTree));
+			response.getOptions().setContentFormat(APPLICATION_LINK_FORMAT);
+			exchange.respond(response);
 		}
 	}
 
 	@Override
 	public void handlePOST(final CoapExchange exchange) {
-		if (exchange == null) {
-			throw new NullPointerException("exchange must not be null!");
-		}
-		Request request = exchange.advanced().getRequest();
-		if (request == null) {
-			throw new NullPointerException("request must not be null!");
-		}
 
-		int format = request.getOptions().getContentFormat();
+		int format = exchange.getRequestOptions().getContentFormat();
 		if (format != UNDEFINED && Arrays.binarySearch(CONTENT_TYPES, format) < 0) {
 			exchange.respond(NOT_ACCEPTABLE);
 			return;
 		}
-		final Principal principal = request.getSourceContext().getPeerIdentity();
-		final DomainDeviceInfo info = DomainDeviceManager.getDeviceInfo(principal);
-		LOGGER.info("S3: {}", info);
 
-		boolean updateSeries = false;
+		final Principal principal = getPrincipal(exchange);
+		final DomainPrincipalInfo info = DomainPrincipalInfo.getPrincipalInfo(principal);
 		boolean forward = false;
 		String read = null;
 		String write = null;
 		try {
-			UriQueryParameter helper = request.getOptions().getUriQueryParameter(SUPPORTED);
-			LOGGER.info("URI-Query: {} {}", request.getOptions().getUriQuery(), info != null ? info : "");
-			List<Option> others = request.getOptions().getOthers();
+			UriQueryParameter helper = exchange.getRequestOptions().getUriQueryParameter(SUPPORTED);
+			LOGGER.info("URI-Query: {} {}", exchange.getRequestOptions().getUriQuery(), info);
+			List<Option> others = exchange.getRequestOptions().getOthers();
 			if (!others.isEmpty()) {
-				LOGGER.info("Other options: {} {}", others, info != null ? info : "");
+				LOGGER.info("Other options: {} {}", others, info);
 			}
-			updateSeries = helper.hasParameter(URI_QUERY_OPTION_SERIES);
 			forward = helper.hasParameter(URI_QUERY_OPTION_FORWARD);
 			if (helper.hasParameter(URI_QUERY_OPTION_READ)) {
 				read = helper.getArgument(URI_QUERY_OPTION_READ, DEFAULT_READ_SUB_RESOURCE_NAME);
@@ -381,174 +368,177 @@ public class S3Devices extends CoapResource {
 			return;
 		}
 
+		Request request = exchange.advanced().getRequest();
 		final TimeOption timeOption = TimeOption.getMessageTime(request);
 		final long time = timeOption.getLongValue();
 
-		Response response = new Response(CHANGED);
-		if (info != null) {
-			final String timestamp = format(time, ChronoUnit.MILLIS);
-			final String domain = info.domain;
-			S3ProxyClient s3Client = s3Clients.getProxyClient(domain);
-			StringBuilder log = new StringBuilder();
-			String position = null;
+		if (info.type == Type.ANONYMOUS_DEVICE ||
+			info.type == Type.APPL_AUTH_DEVICE) {
 
-			LOGGER.info("S3: {}, {}", domain, s3Client.getExternalEndpoint());
-			write = replaceVars(write, timestamp);
-			if (format == TEXT_PLAIN && updateSeries) {
-				String[] lines = request.getPayloadString().split("[\\n\\r]+");
-				for (String line : lines) {
-					if (line.startsWith("!")) {
-						line = line.substring(1);
-						log.append(line).append(',');
-					}
-				}
-			}
-			StringUtil.truncateTail(log, ",");
-			request.setProtectFromOffload();
-			Series series = null;
-			String acl = S3ProxyRequest.getAcl(request, s3Client.getAcl());
-			boolean visible = acl != null && acl.startsWith("public-");
-
-			Resource deviceDomain = domains.get(info.domain);
-			if (!(deviceDomain instanceof DeviceDomain)) {
-				deviceDomain = new DeviceDomain(info.domain, minutes, maxDevices);
-				Resource previous = domains.putIfAbsent(info.domain, deviceDomain);
-				if (previous != null) {
-					deviceDomain = previous;
-				} else {
-					deviceDomain.setParent(this);
-				}
-			}
-			if (deviceDomain instanceof DeviceDomain) {
-				LeastRecentlyUpdatedCache<String, Resource> keptPosts = ((DeviceDomain) deviceDomain).keptPosts;
-				WriteLock lock = keptPosts.writeLock();
-				lock.lock();
-				try {
-					Device device;
-					Resource child = keptPosts.update(info.name);
-					if (child instanceof Device) {
-						device = (Device) child;
-					} else {
-						device = new Device(info.name);
-					}
-					device.setVisible(visible);
-					device.setPost(request, position, time, write);
-					// workaround for javascript dependency on "series-" file
-					series = device.appendSeries(log.toString(), timestamp);
-					if (device.getParent() == null) {
-						device.setParent(deviceDomain);
-						keptPosts.put(info.name, device);
-					}
-					LOGGER.info("Domain: {}, {} devices", info.domain, keptPosts.size());
-				} finally {
-					lock.unlock();
-				}
-			}
-
-			MultiConsumer<Response> multi = new MultiConsumer<Response>() {
-
-				@Override
-				public void complete(Map<String, Response> results) {
-					Response read = results.get("read");
-					Response write = results.get("write");
-					Response forward = results.get("forward");
-					Response response = write != null ? write : read;
-					if (forward != null) {
-						if (response == null || (forward.isSuccess() && !forward.getPayloadString().equals("ack")
-								&& !forward.getPayloadString().equals(""))) {
-							exchange.respond(forward);
+			if (forward && read == null && write == null) {
+				// forward support for anonymous clients.
+				if (forward && httpForwardConfigurationProvider != null) {
+					final HttpForwardConfiguration configuration = httpForwardConfigurationProvider
+							.getConfiguration(info);
+					if (configuration != null && configuration.isValid()) {
+						String serviceName = configuration.getServiceName();
+						HttpForwardService service = HttpForwardServiceManager.getService(serviceName);
+						if (service != null) {
+							service.forwardPOST(request, info, configuration, (response) -> {
+								if (principal == null && response.isSuccess()) {
+									ApplicationAuthorizer authorizer = exchange.advanced().getApplicationAuthorizer();
+									if (authorizer != null) {
+										LOGGER.info("HTTP-forward: {} anonymous client authorized!",
+												StringUtil.toLog(request.getSourceContext().getPeerAddress()));
+										authorizer.authorize(request.getSourceContext(),
+												DomainApplicationAnonymous.APPL_AUTH_PRINCIPAL);
+									}
+								}
+								exchange.respond(response);
+							});
 							return;
 						}
-						response.getOptions().addOtherOption(new ForwardResponseOption(forward.getCode()));
-					}
-					if (write != null && read != null) {
-						if (write.getCode() == CHANGED && read.getCode() == CONTENT) {
-							// Add get response
-							OptionSet options = write.getOptions();
-							options.setContentFormat(read.getOptions().getContentFormat());
-							for (byte[] etag : read.getOptions().getETags()) {
-								options.addOtherOption(ReadEtagOption.DEFINITION.create(etag));
-							}
-							write.setPayload(read.getPayload());
-						}
-						write.getOptions().addOtherOption(new ReadResponseOption(read.getCode()));
-						exchange.respond(write);
-					} else if (write != null) {
-						exchange.respond(write);
-					} else if (read != null) {
-						exchange.respond(read);
-					} else {
-						response = new Response(INTERNAL_SERVER_ERROR);
-						response.setPayload("no internal response!");
-						exchange.respond(response);
 					}
 				}
-			};
+			}
+			Response response = new Response(ResponseCode.UNAUTHORIZED);
+			exchange.respond(response);
+			return;
+		}
+		Response response = new Response(CHANGED);
+		final String timestamp = format(time, ChronoUnit.MILLIS);
+		S3ProxyClient s3Client = s3Clients.getProxyClient(info.domain);
+		String position = null;
 
-			URI httpDestinationUri;
-			if (forward && httpForward != null && httpDestination != null
-					&& ((httpDestinationUri = httpDestination.getDestination(domain)) != null)) {
-				String authentication = httpDestination.getAuthentication(domain);
-				DeviceIdentityMode deviceIdentificationMode = httpDestination.getDeviceIdentityMode(domain);
-				Request outgoing = new Request(request.getCode(), request.getType());
-				outgoing.setOptions(request.getOptions());
-				if (deviceIdentificationMode == DeviceIdentityMode.HEADLINE) {
-					byte[] head = (info.name + StringUtil.lineSeparator()).getBytes(StandardCharsets.UTF_8);
-					byte[] payload = Bytes.concatenate(head, request.getPayload());
-					outgoing.setPayload(payload);
-				} else if (deviceIdentificationMode == DeviceIdentityMode.QUERY_PARAMETER) {
-					outgoing.getOptions().addUriQuery("id=" + info.name);
+		LOGGER.info("S3: {}, {}", info.domain, s3Client.getExternalEndpoint());
+		String writeExpanded = replaceVars(write, timestamp);
+		request.setProtectFromOffload();
+		String acl = S3ProxyRequest.getAcl(request, s3Client.getAcl());
+		boolean visible = acl != null && acl.startsWith("public-");
+
+		Resource deviceDomain = domains.get(info.domain);
+		if (!(deviceDomain instanceof DeviceDomain)) {
+			deviceDomain = new DeviceDomain(info.domain, minutes, maxDevices);
+			Resource previous = domains.putIfAbsent(info.domain, deviceDomain);
+			if (previous != null) {
+				deviceDomain = previous;
+			} else {
+				deviceDomain.setParent(this);
+			}
+		}
+		if (deviceDomain instanceof DeviceDomain) {
+			LeastRecentlyUpdatedCache<String, Resource> keptPosts = ((DeviceDomain) deviceDomain).keptPosts;
+			WriteLock lock = keptPosts.writeLock();
+			lock.lock();
+			try {
+				Device device;
+				Resource child = keptPosts.update(info.name);
+				if (child instanceof Device) {
+					device = (Device) child;
+				} else {
+					device = new Device(info.name);
 				}
-				LOGGER.info("HTTP: {} => {} {}", info, httpDestinationUri, deviceIdentificationMode);
-				final Consumer<Response> consumer = multi.create("forward");
+				device.setVisible(visible);
+				device.setPost(request, position, time, writeExpanded);
+				if (device.getParent() == null) {
+					device.setParent(deviceDomain);
+					keptPosts.put(info.name, device);
+				}
+				LOGGER.info("Domain: {}, {} devices", info.domain, keptPosts.size());
+			} finally {
+				lock.unlock();
+			}
+		}
 
-				httpForward.handleForward(httpDestinationUri, authentication, outgoing, new ResponseConsumer() {
+		MultiConsumer<Response> multi = new MultiConsumer<Response>() {
 
-					@Override
-					public void respond(Response response) {
-						consumer.accept(response);
+			@Override
+			public void complete(Map<String, Response> results) {
+				Response read = results.get("read");
+				Response write = results.get("write");
+				Response forward = results.get("forward");
+				Response response = write != null ? write : read;
+				if (forward != null) {
+					if (response == null || (forward.isSuccess() && forward.getPayloadSize() > 0)) {
+						exchange.respond(forward);
+						return;
 					}
-
-				});
-			}
-
-			if (read != null && !read.isEmpty()) {
-				List<Option> readEtag = request.getOptions().getOthers(ReadEtagOption.DEFINITION);
-				S3ProxyRequest s3ReadRequest = S3ProxyRequest.builder(request).pathPrincipalIndex(1).subPath(read)
-						.etags(readEtag).build();
-				s3Client.get(s3ReadRequest, multi.create("read"));
-			}
-
-			if (write != null && !write.isEmpty()) {
-				final Consumer<Response> putResponseConsumer = multi.create("write");
-
-				S3ProxyRequest s3WriteRequest = S3ProxyRequest.builder(request).pathPrincipalIndex(1).subPath(write)
-						.build();
-				s3Client.put(s3WriteRequest, new Consumer<Response>() {
-
-					@Override
-					public void accept(Response response) {
-						// respond with time?
-						final TimeOption responseTimeOption = timeOption.adjust();
-						if (responseTimeOption != null) {
-							response.getOptions().addOtherOption(responseTimeOption);
+					// forward response code in custom option
+					response.getOptions()
+							.addOtherOption(S3ProxyCustomOptions.FORWARD_RESPONSE.create(forward.getCode()));
+				}
+				if (write != null && read != null) {
+					if (write.getCode() == CHANGED && read.getCode() == CONTENT) {
+						// Add get response
+						OptionSet options = write.getOptions();
+						options.setContentFormat(read.getOptions().getContentFormat());
+						for (OpaqueOption etag : read.getOptions().getETags()) {
+							options.addOtherOption(ServerCustomOptions.READ_ETAG.create(etag.getValue()));
 						}
-						putResponseConsumer.accept(response);
-						if (response.isSuccess()) {
-							LOGGER.info("Device {} updated!{}", info, visible ? " (public)" : " (private)");
-						} else {
-							LOGGER.info("Device {} update failed!", info);
-						}
+						write.setPayload(read.getPayload());
 					}
-				});
+					// forward response code in custom option
+					write.getOptions().addOtherOption(ServerCustomOptions.READ_RESPONSE.create(read.getCode()));
+					exchange.respond(write);
+				} else if (write != null) {
+					exchange.respond(write);
+				} else if (read != null) {
+					exchange.respond(read);
+				} else {
+					response = new Response(INTERNAL_SERVER_ERROR);
+					response.setPayload("no internal response!");
+					exchange.respond(response);
+				}
 			}
+		};
 
-			if (series != null) {
-				updateSeries(request, series, s3Client);
+		if (forward && httpForwardConfigurationProvider != null) {
+			final HttpForwardConfiguration configuration = httpForwardConfigurationProvider.getConfiguration(info);
+			if (configuration != null && configuration.isValid()) {
+				String serviceName = configuration.getServiceName();
+				HttpForwardService service = HttpForwardServiceManager.getService(serviceName);
+				if (service != null) {
+					final Consumer<Response> consumer = multi.create("forward");
+					service.forwardPOST(request, info, configuration, consumer);
+				}
 			}
-			if (multi.created()) {
-				return;
+		}
+
+		if (read != null && !read.isEmpty()) {
+			List<Option> readEtag = request.getOptions().getOthers(ServerCustomOptions.READ_ETAG);
+			List<OpaqueOption> etags = new ArrayList<OpaqueOption>(readEtag.size());
+			for (Option option : readEtag) {
+				etags.add((OpaqueOption) option);
 			}
+			S3ProxyRequest s3ReadRequest = S3ProxyRequest.builder(request).pathPrincipalIndex(1).subPath(read)
+					.etags(etags).build();
+			s3Client.get(s3ReadRequest, multi.create("read"));
+		}
+
+		if (writeExpanded != null && !writeExpanded.isEmpty()) {
+			final Consumer<Response> putResponseConsumer = multi.create("write");
+
+			Builder builder = S3ProxyRequest.builder(request).pathPrincipalIndex(1).subPath(writeExpanded);
+			if (write.equals(writeExpanded)) {
+				builder.timestamp(time);
+			}
+			s3Client.put(builder.build(), (s3Response) -> {
+				// respond with time?
+				final TimeOption responseTimeOption = timeOption.adjust();
+				if (responseTimeOption != null) {
+					s3Response.getOptions().addOtherOption(responseTimeOption);
+				}
+				putResponseConsumer.accept(s3Response);
+				if (s3Response.isSuccess()) {
+					LOGGER.info("Device {} updated!{}", info, visible ? " (public)" : " (private)");
+				} else {
+					LOGGER.info("Device {} update failed!", info);
+				}
+			});
+		}
+
+		if (multi.created()) {
+			return;
 		}
 		// respond with time?
 		final TimeOption responseTimeOption = timeOption.adjust();
@@ -556,66 +546,6 @@ public class S3Devices extends CoapResource {
 			response.getOptions().addOtherOption(responseTimeOption);
 		}
 		exchange.respond(response);
-	}
-
-	private void updateSeries(Request request, Series series, S3ProxyClient s3Client) {
-		String content;
-		String subResouce;
-		synchronized (series) {
-			content = series.getContent();
-			subResouce = series.getS3Link();
-		}
-		if (content != null) {
-			S3ProxyRequest s3SeriesRequest = S3ProxyRequest.builder(request).pathPrincipalIndex(1).subPath(subResouce)
-					.content(content.getBytes(StandardCharsets.UTF_8)).contentType("text/plain; charset=utf-8").build();
-			s3Client.put(s3SeriesRequest, S3AsyncProxyClient.NOP);
-		}
-	}
-
-	private static abstract class MultiConsumer<T> {
-
-		private boolean created;
-		private Map<String, T> results = new HashMap<>();
-
-		public Consumer<T> create(final String tag) {
-			synchronized (results) {
-				if (results.containsKey(tag)) {
-					throw new IllegalArgumentException(tag + " already used!");
-				}
-				results.put(tag, null);
-			}
-			return new Consumer<T>() {
-
-				@Override
-				public void accept(T t) {
-					boolean ready = false;
-					synchronized (results) {
-						results.put(tag, t);
-						ready = created && !results.containsValue(null);
-					}
-					if (ready) {
-						complete(results);
-					}
-				}
-			};
-		}
-
-		public boolean created() {
-			boolean ready = false;
-			synchronized (results) {
-				if (results.isEmpty()) {
-					return false;
-				}
-				created = true;
-				ready = !results.containsValue(null);
-			}
-			if (ready) {
-				complete(results);
-			}
-			return true;
-		}
-
-		abstract public void complete(Map<String, T> results);
 	}
 
 	/**
@@ -656,11 +586,10 @@ public class S3Devices extends CoapResource {
 	}
 
 	/**
-	 * Resource representing devices
+	 * Resource representing devices.
 	 */
-	public static class Device extends CoapResource {
+	public static class Device extends ProtectedCoapResource {
 
-		private Series series = null;
 		private volatile Request post;
 		private volatile long time;
 
@@ -708,43 +637,19 @@ public class S3Devices extends CoapResource {
 			changed();
 		}
 
-		private Series appendSeries(String values, String timestamp) {
-			Series series = null;
-			synchronized (this) {
-				if (this.series != null) {
-					if (!this.series.append(values, timestamp)) {
-						delete(this.series);
-						this.series = null;
-					}
-				}
-				if (this.series == null) {
-					this.series = new Series(timestamp);
-					this.series.append(values, timestamp);
-					add(this.series);
-				}
-				series = this.series;
-				series.setVisible(isVisible());
+		@Override
+		protected ResponseCode checkOperationPermission(PrincipalInfo info, Exchange exchange, boolean write) {
+			if (!isVisible() && !getName().equals(info.name)) {
+				return FORBIDDEN;
 			}
-			return series;
-		}
-
-		private boolean hasPermission(Request request) {
-			final Principal principal = request.getSourceContext().getPeerIdentity();
-			final DomainDeviceInfo info = DomainDeviceManager.getDeviceInfo(principal);
-			return info != null && (isVisible() || getName().equals(info.name));
+			return null;
 		}
 
 		@Override
 		public void handleGET(CoapExchange exchange) {
 			Request devicePost = post;
-			// get request to read out details
-			Request request = exchange.advanced().getRequest();
-			if (!hasPermission(request)) {
-				exchange.respond(FORBIDDEN);
-				return;
-			}
 			int format = devicePost.getOptions().getContentFormat();
-			int accept = request.getOptions().getAccept();
+			int accept = exchange.getRequestOptions().getAccept();
 			if (accept == UNDEFINED) {
 				accept = format == UNDEFINED ? APPLICATION_OCTET_STREAM : format;
 			} else if (format == UNDEFINED) {
@@ -768,85 +673,6 @@ public class S3Devices extends CoapResource {
 		}
 	}
 
-	public static class Series extends CoapResource {
-
-		private final String startDate;
-		private final String s3Link;
-		private final StringBuilder content = new StringBuilder();
-
-		private Series(String timestamp) {
-			super(SUB_RESOURCE_NAME);
-			this.startDate = timestamp;
-			this.s3Link = SUB_RESOURCE_NAME + "-" + timestamp;
-			getAttributes().setAttribute(ATTRIBUTE_S3_LINK, "-" + timestamp);
-		}
-
-		@Override
-		public void setParent(Resource parent) {
-			super.setParent(parent);
-			synchronized (this) {
-				ResourceAttributes attributes = new ResourceAttributes(getAttributes());
-				if (parent != null) {
-					attributes.setTitle(parent.getName() + " => " + SUB_RESOURCE_NAME);
-				} else {
-					attributes.clearTitle();
-				}
-				setAttributes(attributes);
-			}
-		}
-
-		private Device getDevice() {
-			return (Device) getParent();
-		}
-
-		private String getS3Link() {
-			return s3Link;
-		}
-
-		private boolean append(String values, String timestamp) {
-			synchronized (this) {
-				int len = content.length();
-				String line = timestamp + ": ";
-				if (values != null && !values.isEmpty()) {
-					line += values;
-				}
-				boolean swap = len + line.length() > SERIES_MAX_SIZE;
-				if (swap || !startDate.regionMatches(0, timestamp, 0, 11)) {
-					return false;
-				}
-				if (len > 0) {
-					if (content.charAt(len - 1) != '\n') {
-						content.append('\n');
-					}
-				}
-				content.append(line);
-				return true;
-			}
-		}
-
-		private String getContent() {
-			return content.toString();
-		}
-
-		public void handleGET(CoapExchange exchange) {
-			Request request = exchange.advanced().getRequest();
-			if (!getDevice().hasPermission(request)) {
-				exchange.respond(FORBIDDEN);
-				return;
-			}
-			int accept = request.getOptions().getAccept();
-			if (accept != UNDEFINED && accept != TEXT_PLAIN) {
-				exchange.respond(NOT_ACCEPTABLE);
-				return;
-			}
-			Response response = new Response(CONTENT);
-			response.setPayload(content.toString());
-			response.getOptions().setContentFormat(TEXT_PLAIN);
-			exchange.respond(response);
-		}
-
-	}
-
 	private static String format(long millis, ChronoUnit unit) {
 		Instant instant = Instant.ofEpochMilli(millis).truncatedTo(unit);
 		String time = DateTimeFormatter.ISO_INSTANT.format(instant);
@@ -858,7 +684,7 @@ public class S3Devices extends CoapResource {
 	}
 
 	/**
-	 * Replace supported variables.
+	 * Replaces supported variables.
 	 * 
 	 * {@code ${now}}, {@code ${date}}, and {@code ${time}} are replaced with
 	 * the current timestamp, either device time, if the device supports the

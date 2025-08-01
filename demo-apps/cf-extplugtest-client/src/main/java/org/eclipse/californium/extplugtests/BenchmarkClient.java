@@ -42,8 +42,6 @@ import java.util.Collections;
 import java.util.Formatter;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -61,12 +59,14 @@ import org.eclipse.californium.core.CoapObserveRelation;
 import org.eclipse.californium.core.CoapResponse;
 import org.eclipse.californium.core.CoapServer;
 import org.eclipse.californium.core.Utils;
-import org.eclipse.californium.core.coap.BlockOption;
 import org.eclipse.californium.core.coap.CoAP;
 import org.eclipse.californium.core.coap.CoAP.Code;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.coap.EndpointContextTracer;
 import org.eclipse.californium.core.coap.Message.OffloadMode;
+import org.eclipse.californium.core.coap.option.BlockOption;
+import org.eclipse.californium.core.coap.option.StandardOptionRegistry;
+import org.eclipse.californium.core.coap.option.StringOption;
 import org.eclipse.californium.core.coap.MessageObserver;
 import org.eclipse.californium.core.coap.MessageObserverAdapter;
 import org.eclipse.californium.core.coap.Request;
@@ -95,6 +95,7 @@ import org.eclipse.californium.elements.util.DaemonThreadFactory;
 import org.eclipse.californium.elements.util.ExecutorsUtil;
 import org.eclipse.californium.elements.util.FilteredLogger;
 import org.eclipse.californium.elements.util.NamedThreadFactory;
+import org.eclipse.californium.elements.util.ProtocolScheduledExecutorService;
 import org.eclipse.californium.elements.util.StringUtil;
 import org.eclipse.californium.elements.util.TimeStatistic;
 import org.eclipse.californium.extplugtests.resources.Feed;
@@ -115,7 +116,7 @@ import picocli.CommandLine.Spec;
 
 /**
  * Simple benchmark client.
- * 
+ * <p>
  * Starts multiple parallel clients to send CON-POST requests. Print statistic
  * with retransmissions.
  */
@@ -180,44 +181,39 @@ public class BenchmarkClient {
 	/**
 	 * Special configuration defaults handler.
 	 */
-	private static DefinitionsProvider DEFAULTS = new DefinitionsProvider() {
-
-		@Override
-		public void applyDefinitions(Configuration config) {
-			config.set(BENCHMARK_CLIENT_THREADS, 0);
-			config.set(BENCHMARK_RESPONSE_TIMEOUT, 30, TimeUnit.SECONDS);
-			config.set(CoapConfig.MAX_RESOURCE_BODY_SIZE, DEFAULT_MAX_RESOURCE_SIZE);
-			config.set(CoapConfig.MAX_MESSAGE_SIZE, DEFAULT_BLOCK_SIZE);
-			config.set(CoapConfig.PREFERRED_BLOCK_SIZE, DEFAULT_BLOCK_SIZE);
-			config.set(CoapConfig.MAX_ACTIVE_PEERS, 10);
-			config.set(CoapConfig.PEERS_MARK_AND_SWEEP_MESSAGES, 16);
-			config.set(CoapConfig.DEDUPLICATOR, CoapConfig.DEDUPLICATOR_PEERS_MARK_AND_SWEEP);
-			config.set(CoapConfig.MAX_PEER_INACTIVITY_PERIOD, 24, TimeUnit.HOURS);
-			config.set(CoapConfig.PROTOCOL_STAGE_THREAD_COUNT, 1);
-			// enabled by cli option, see "--bertblocks".
-			config.set(CoapConfig.TCP_NUMBER_OF_BULK_BLOCKS, 1);
-			config.set(TcpConfig.TCP_CONNECTION_IDLE_TIMEOUT, 12, TimeUnit.HOURS);
-			config.set(TcpConfig.TCP_CONNECT_TIMEOUT, 30, TimeUnit.SECONDS);
-			config.set(TcpConfig.TLS_HANDSHAKE_TIMEOUT, 30, TimeUnit.SECONDS);
-			config.set(TcpConfig.TLS_VERIFY_SERVER_CERTIFICATES_SUBJECT, false);
-			config.set(TcpConfig.TCP_WORKER_THREADS, 1);
-			config.set(UdpConfig.UDP_RECEIVER_THREAD_COUNT, 1);
-			config.set(UdpConfig.UDP_SENDER_THREAD_COUNT, 1);
-			config.set(UdpConfig.UDP_RECEIVE_BUFFER_SIZE, 8192);
-			config.set(UdpConfig.UDP_SEND_BUFFER_SIZE, 8192);
-			config.set(DtlsConfig.DTLS_RECEIVER_THREAD_COUNT, 1);
-			config.set(DtlsConfig.DTLS_MAX_CONNECTIONS, 10);
-			config.set(DtlsConfig.DTLS_MAX_RETRANSMISSIONS, 2);
-			config.set(DtlsConfig.DTLS_AUTO_HANDSHAKE_TIMEOUT, null, TimeUnit.SECONDS);
-			// support CID, but don't use for received records
-			config.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, 0);
-			config.set(DtlsConfig.DTLS_RECEIVE_BUFFER_SIZE, 8192);
-			config.set(DtlsConfig.DTLS_SEND_BUFFER_SIZE, 8192);
-			config.set(DtlsConfig.DTLS_VERIFY_SERVER_CERTIFICATES_SUBJECT, false);
-			config.set(DtlsConfig.DTLS_REMOVE_STALE_DOUBLE_PRINCIPALS, false);
-			config.set(SystemConfig.HEALTH_STATUS_INTERVAL, 0, TimeUnit.SECONDS); // disabled
-		}
-
+	private static DefinitionsProvider DEFAULTS = (config) -> {
+		config.set(BENCHMARK_CLIENT_THREADS, 0);
+		config.set(BENCHMARK_RESPONSE_TIMEOUT, 30, TimeUnit.SECONDS);
+		config.set(CoapConfig.MAX_RESOURCE_BODY_SIZE, DEFAULT_MAX_RESOURCE_SIZE);
+		config.set(CoapConfig.MAX_MESSAGE_SIZE, DEFAULT_BLOCK_SIZE);
+		config.set(CoapConfig.PREFERRED_BLOCK_SIZE, DEFAULT_BLOCK_SIZE);
+		config.set(CoapConfig.MAX_ACTIVE_PEERS, 10);
+		config.set(CoapConfig.PEERS_MARK_AND_SWEEP_MESSAGES, 16);
+		config.set(CoapConfig.DEDUPLICATOR, CoapConfig.DEDUPLICATOR_PEERS_MARK_AND_SWEEP);
+		config.set(CoapConfig.MAX_PEER_INACTIVITY_PERIOD, 24, TimeUnit.HOURS);
+		config.set(CoapConfig.PROTOCOL_STAGE_THREAD_COUNT, 1);
+		// enabled by cli option, see "--bertblocks".
+		config.set(CoapConfig.TCP_NUMBER_OF_BULK_BLOCKS, 1);
+		config.set(TcpConfig.TCP_CONNECTION_IDLE_TIMEOUT, 12, TimeUnit.HOURS);
+		config.set(TcpConfig.TCP_CONNECT_TIMEOUT, 30, TimeUnit.SECONDS);
+		config.set(TcpConfig.TLS_HANDSHAKE_TIMEOUT, 30, TimeUnit.SECONDS);
+		config.set(TcpConfig.TLS_VERIFY_SERVER_CERTIFICATES_SUBJECT, false);
+		config.set(TcpConfig.TCP_WORKER_THREADS, 1);
+		config.set(UdpConfig.UDP_RECEIVER_THREAD_COUNT, -1);
+		config.set(UdpConfig.UDP_SENDER_THREAD_COUNT, -1);
+		config.set(UdpConfig.UDP_RECEIVE_BUFFER_SIZE, 8192);
+		config.set(UdpConfig.UDP_SEND_BUFFER_SIZE, 8192);
+		config.set(DtlsConfig.DTLS_RECEIVER_THREAD_COUNT, -1);
+		config.set(DtlsConfig.DTLS_MAX_CONNECTIONS, 10);
+		config.set(DtlsConfig.DTLS_MAX_RETRANSMISSIONS, 2);
+		config.set(DtlsConfig.DTLS_AUTO_HANDSHAKE_TIMEOUT, null, TimeUnit.SECONDS);
+		// support CID, but don't use for received records
+		config.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, 0);
+		config.set(DtlsConfig.DTLS_RECEIVE_BUFFER_SIZE, 8192);
+		config.set(DtlsConfig.DTLS_SEND_BUFFER_SIZE, 8192);
+		config.set(DtlsConfig.DTLS_VERIFY_SERVER_CERTIFICATES_SUBJECT, false);
+		config.set(DtlsConfig.DTLS_REMOVE_STALE_DOUBLE_PRINCIPALS, false);
+		config.set(SystemConfig.HEALTH_STATUS_INTERVAL, 0, TimeUnit.SECONDS); // disabled
 	};
 
 	@Command(name = "BenchmarkClient", version = "(c) 2018-2020, Bosch.IO GmbH and others.", footer = { "", "Examples:",
@@ -595,7 +591,7 @@ public class BenchmarkClient {
 	/**
 	 * Executor service for this client.
 	 */
-	private final ScheduledExecutorService executorService;
+	private final ProtocolScheduledExecutorService executorService;
 	/**
 	 * Client to be used for benchmark.
 	 */
@@ -727,16 +723,16 @@ public class BenchmarkClient {
 			if (response.isSuccess()) {
 				if (!stop.get()) {
 					String cmd = null;
-					List<String> queries = response.getOptions().getLocationQuery();
-					for (String query : queries) {
-						if (query.startsWith("hono-command=")) {
-							cmd = query.substring("hono-command=".length());
+					List<StringOption> queries = response.getOptions().getLocationQuery();
+					for (StringOption query : queries) {
+						if (query.getStringValue().startsWith("hono-command=")) {
+							cmd = query.getStringValue().substring("hono-command=".length());
 							break;
 						}
 					}
 					if (cmd != null) {
 						overallHonoCmds.incrementAndGet();
-						List<String> location = response.getOptions().getLocationPath();
+						List<StringOption> location = response.getOptions().getLocationPath();
 						if (location.size() == 2 || location.size() == 4) {
 							LOGGER.debug("{}: cmd {}: {}", id, cmd, location);
 							final Request cmdResponse = post.getCode() == Code.PUT ? Request.newPut()
@@ -990,7 +986,7 @@ public class BenchmarkClient {
 	 *            (e.g. cleanup tasks).
 	 */
 	public BenchmarkClient(int index, Config.Reverse reverse, URI uri, CoapEndpoint endpoint,
-			ScheduledExecutorService executor, ScheduledThreadPoolExecutor secondaryExecutor) {
+			ProtocolScheduledExecutorService executor) {
 		this.secure = CoAP.isSecureScheme(uri.getScheme());
 		this.tcp = CoAP.isTcpScheme(uri.getScheme());
 		Connector connector = endpoint.getConnector();
@@ -1001,7 +997,7 @@ public class BenchmarkClient {
 		int maxResourceSize = configuration.get(CoapConfig.MAX_RESOURCE_BODY_SIZE);
 		if (executor == null) {
 			int threads = configuration.get(BENCHMARK_CLIENT_THREADS);
-			this.executorService = ExecutorsUtil.newScheduledThreadPool(threads, threadFactory);
+			this.executorService = ExecutorsUtil.newProtocolScheduledThreadPool(threads, threadFactory);
 			this.shutdown = true;
 		} else {
 			this.executorService = executor;
@@ -1011,13 +1007,13 @@ public class BenchmarkClient {
 		this.responseTimeout = configuration.getTimeAsInt(BENCHMARK_RESPONSE_TIMEOUT, TimeUnit.MILLISECONDS);
 
 		if (config.blockwiseOptions != null && config.blockwiseOptions.blocksize != null) {
-			block2 = new BlockOption(BlockOption.size2Szx(config.blockwiseOptions.blocksize), false, 0);
+			block2 = StandardOptionRegistry.BLOCK2.create(BlockOption.size2Szx(config.blockwiseOptions.blocksize), false, 0);
 		} else {
 			block2 = null;
 		}
 
 		endpoint.addInterceptor(new MessageTracer());
-		endpoint.setExecutors(this.executorService, secondaryExecutor);
+		endpoint.setExecutor(this.executorService);
 		this.client = new CoapClient(uri);
 		this.server = new CoapServer(configuration);
 		if (reverse != null) {
@@ -1030,8 +1026,8 @@ public class BenchmarkClient {
 			feed.addObserver(feedObserver);
 			this.server.add(feed);
 		}
-		this.server.setExecutors(this.executorService, secondaryExecutor, true);
-		this.client.setExecutors(this.executorService, secondaryExecutor, true);
+		this.server.setExecutor(this.executorService, true);
+		this.client.setExecutor(this.executorService, true);
 		this.endpoint = endpoint;
 	}
 
@@ -1351,18 +1347,18 @@ public class BenchmarkClient {
 		overallReverseResponsesDownCounter.set(overallReverseResponses);
 		overallNotifiesDownCounter.set(overallNotifies);
 
+		int clienThreads = config.configuration.get(BENCHMARK_CLIENT_THREADS);
+		int threads = Runtime.getRuntime().availableProcessors();
+		if (clienThreads == 0) threads *= 2;
 		final List<BenchmarkClient> clientList = Collections.synchronizedList(new ArrayList<BenchmarkClient>(clients));
-		ScheduledExecutorService executor = ExecutorsUtil
-				.newScheduledThreadPool(Runtime.getRuntime().availableProcessors(), new DaemonThreadFactory("Aux#"));
+		ProtocolScheduledExecutorService executor = ExecutorsUtil
+				.newProtocolScheduledThreadPool(threads, new DaemonThreadFactory("Aux#"));
 
-		final ScheduledExecutorService connectorExecutor = config.configuration.get(BENCHMARK_CLIENT_THREADS) == 0
+		final ProtocolScheduledExecutorService connectorExecutor = clienThreads == 0
 				? executor
 				: null;
 		final boolean secure = CoAP.isSecureScheme(uri.getScheme());
 		final boolean dtls = secure && !CoAP.isTcpScheme(uri.getScheme());
-
-		final ScheduledThreadPoolExecutor secondaryExecutor = new ScheduledThreadPoolExecutor(2,
-				new DaemonThreadFactory("Aux(secondary)#"));
 
 		String proxyMessage = "";
 		if (config.proxy != null) {
@@ -1411,7 +1407,8 @@ public class BenchmarkClient {
 				break;
 			}
 		}
-		final ThreadLocalKeyPairGenerator keyPairGenerator = rpk ? createKeyPairGenerator() : null;
+		final boolean anonymous = config.authentication != null && config.authentication.anonymous;
+		final ThreadLocalKeyPairGenerator keyPairGenerator = (secure && rpk && !anonymous) ? createKeyPairGenerator() : null;
 		// Create & start clients
 		final AtomicBoolean errors = new AtomicBoolean();
 		health = new HealthStatisticLogger(uri.getScheme(), CoAP.isUdpScheme(uri.getScheme()));
@@ -1425,7 +1422,7 @@ public class BenchmarkClient {
 			final int currentIndex = index;
 			final String identity;
 			final SecretKey secret;
-			if (secure && psk) {
+			if (secure && psk && !anonymous) {
 				if (config.pskStore != null) {
 					int pskIndex = (pskOffset + index) % config.pskStore.size();
 					identity = config.pskStore.getIdentity(pskIndex);
@@ -1450,7 +1447,7 @@ public class BenchmarkClient {
 						return;
 					}
 					ClientConfig connectionConfig = config;
-					if (secure) {
+					if (secure && !anonymous) {
 						if (rpk) {
 							if (keyPairGenerator != null) {
 								try {
@@ -1483,7 +1480,7 @@ public class BenchmarkClient {
 						coapEndpoint.addPostProcessInterceptor(health);
 					}
 					BenchmarkClient client = new BenchmarkClient(currentIndex, config.reverse, uri, coapEndpoint,
-							connectorExecutor, secondaryExecutor);
+							connectorExecutor);
 					clientList.add(client);
 					try {
 						client.start();

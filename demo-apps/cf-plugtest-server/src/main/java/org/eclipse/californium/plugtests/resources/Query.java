@@ -18,9 +18,9 @@ package org.eclipse.californium.plugtests.resources;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.*;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.*;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.coap.Request;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 
 /**
  * This resource implements a test of specification for the
@@ -31,6 +31,7 @@ public class Query extends CoapResource {
 	public Query() {
 		super("query");
 		getAttributes().setTitle("Resource accepting query parameters");
+		addSupportedContentFormats(TEXT_PLAIN);
 	}
 
 	@Override

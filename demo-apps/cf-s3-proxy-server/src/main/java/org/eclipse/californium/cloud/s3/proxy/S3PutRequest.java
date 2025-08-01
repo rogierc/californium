@@ -14,12 +14,20 @@
  ********************************************************************************/
 package org.eclipse.californium.cloud.s3.proxy;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /**
  * S3 PUT request.
  * 
  * @since 3.13
  */
 public class S3PutRequest extends S3Request {
+
+	/**
+	 * Name of time in metadata.
+	 */
+	public static final String METADATA_TIME = "time";
 
 	/**
 	 * Content for S3 PUT requests.
@@ -33,28 +41,34 @@ public class S3PutRequest extends S3Request {
 	 * Timestamp for S3 PUT request.
 	 */
 	private final Long timestamp;
+	/**
+	 * Map of meta data.
+	 */
+	private final Map<String, String> meta;
 
 	/**
-	 * Create S3 PUT request.
+	 * Creates S3 PUT request.
 	 * 
 	 * @param key S3 key.
 	 * @param content content for S3 PUT requests
 	 * @param contentType content type for S3 PUT requests
 	 * @param timestamp timestamp for S3 PUT requests
+	 * @param meta map of meta data
 	 * @param redirect redirect info, if S3 bucket is temporary redirected after
 	 *            creating.
-	 * @param force force mode. {@code true} to not use ETAGs.
+	 * @param cacheMode cache mode.
 	 */
-	public S3PutRequest(String key, byte[] content, String contentType, Long timestamp, Redirect redirect,
-			boolean force) {
-		super(key, redirect, force);
+	public S3PutRequest(String key, byte[] content, String contentType, Long timestamp, Map<String, String> meta,
+			Redirect redirect, CacheMode cacheMode) {
+		super(key, redirect, cacheMode);
 		this.content = content;
 		this.contentType = contentType;
 		this.timestamp = timestamp;
+		this.meta = meta;
 	}
 
 	/**
-	 * Get content for S3 PUT.
+	 * Gets content for S3 PUT.
 	 * 
 	 * @return content for S3 PUT.
 	 */
@@ -63,7 +77,7 @@ public class S3PutRequest extends S3Request {
 	}
 
 	/**
-	 * Get content type for S3 PUT.
+	 * Gets content type for S3 PUT.
 	 * 
 	 * @return content type for S3 PUT.
 	 */
@@ -72,7 +86,7 @@ public class S3PutRequest extends S3Request {
 	}
 
 	/**
-	 * Get timestamp for S3 PUT.
+	 * Gets timestamp for S3 PUT.
 	 * 
 	 * @return timestamp for S3 PUT.
 	 */
@@ -81,7 +95,24 @@ public class S3PutRequest extends S3Request {
 	}
 
 	/**
-	 * Create S3 PUT request builder.
+	 * Gets metadata for S3 PUT.
+	 * 
+	 * @return metadata, maybe empty.
+	 * @since 3.13
+	 */
+	public Map<String, String> getMetadata() {
+		Map<String, String> meta = new HashMap<>();
+		if (this.meta != null) {
+			meta.putAll(this.meta);
+		}
+		if (timestamp != null) {
+			meta.put(METADATA_TIME, Long.toString(timestamp));
+		}
+		return meta;
+	}
+
+	/**
+	 * Creates S3 PUT request builder.
 	 * 
 	 * @return created builder
 	 */
@@ -90,7 +121,7 @@ public class S3PutRequest extends S3Request {
 	}
 
 	/**
-	 * Create S3 PUT request builder from S3 PUT request.
+	 * Creates S3 PUT request builder from S3 PUT request.
 	 * 
 	 * @param request S3 PUT request.
 	 * @return created builder
@@ -116,15 +147,19 @@ public class S3PutRequest extends S3Request {
 		 * Timestamp for S3 PUT request.
 		 */
 		protected Long timestamp;
+		/**
+		 * Map of meta data.
+		 */
+		protected Map<String, String> meta;
 
 		/**
-		 * Create S3 PUT request builder.
+		 * Creates S3 PUT request builder.
 		 */
 		protected Builder() {
 		}
 
 		/**
-		 * Create builder from S3 PUT request.
+		 * Creates builder from S3 PUT request.
 		 * 
 		 * @param request S3 PUT request
 		 */
@@ -142,7 +177,7 @@ public class S3PutRequest extends S3Request {
 		}
 
 		/**
-		 * Set content for S3 PUT request.
+		 * Sets content for S3 PUT request.
 		 * 
 		 * @param content content
 		 * @return builder for command chaining
@@ -153,7 +188,7 @@ public class S3PutRequest extends S3Request {
 		}
 
 		/**
-		 * Set content-type for S3 PUT request.
+		 * Sets content-type for S3 PUT request.
 		 * 
 		 * @param contentType content-type for PUT request
 		 * @return builder for command chaining
@@ -164,7 +199,7 @@ public class S3PutRequest extends S3Request {
 		}
 
 		/**
-		 * Set timestamp for S3 PUT request.
+		 * Sets timestamp for S3 PUT request.
 		 * 
 		 * @param timestamp timestamp
 		 * @return builder for command chaining
@@ -174,9 +209,26 @@ public class S3PutRequest extends S3Request {
 			return this;
 		}
 
+		/**
+		 * Sets map of meta data.
+		 * 
+		 * @param meta map of meta data.
+		 * @return builder for command chaining
+		 */
+		public Builder meta(Map<String, String> meta) {
+			this.meta = meta;
+			return this;
+		}
+
 		@Override
 		public Builder redirect(Redirect redirect) {
 			super.redirect(redirect);
+			return this;
+		}
+
+		@Override
+		public Builder cacheMode(CacheMode cacheMode) {
+			super.cacheMode(cacheMode);
 			return this;
 		}
 
@@ -186,7 +238,7 @@ public class S3PutRequest extends S3Request {
 		 * @return S3 PUT request
 		 */
 		public S3PutRequest build() {
-			return new S3PutRequest(key, content, contentType, timestamp, redirect, force);
+			return new S3PutRequest(key, content, contentType, timestamp, meta, redirect, cacheMode);
 		}
 	}
 }

@@ -64,23 +64,24 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.eclipse.californium.core.coap.BlockOption;
 import org.eclipse.californium.core.coap.CoAP.Type;
+import org.eclipse.californium.core.coap.option.BlockOption;
+import org.eclipse.californium.core.coap.option.NoResponseOption;
 import org.eclipse.californium.core.config.CoapConfig;
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.coap.EmptyMessage;
 import org.eclipse.californium.core.coap.Message;
-import org.eclipse.californium.core.coap.NoResponseOption;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.coap.Token;
 import org.eclipse.californium.core.network.stack.BlockwiseLayer;
 import org.eclipse.californium.core.network.stack.CoapStack;
 import org.eclipse.californium.core.observe.ObserveRelation;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.elements.Connector;
 import org.eclipse.californium.elements.EndpointContext;
 import org.eclipse.californium.elements.EndpointIdentityResolver;
 import org.eclipse.californium.elements.UdpMulticastConnector;
+import org.eclipse.californium.elements.auth.ApplicationAuthorizer;
 import org.eclipse.californium.elements.util.CheckedExecutor;
 import org.eclipse.californium.elements.util.ClockUtil;
 import org.eclipse.californium.elements.util.SerialExecutor;
@@ -862,6 +863,18 @@ public class Exchange {
 	}
 
 	/**
+	 * Gets application authorizer.
+	 * 
+	 * @return application authorizer, or {@code null}, if not supported by this
+	 *         exchange.
+	 * @since 4.0
+	 */
+	public ApplicationAuthorizer getApplicationAuthorizer() {
+		Endpoint endpoint = getEndpoint();
+		return endpoint == null ? null : endpoint.getApplicationAuthorizer();
+	}
+
+	/**
 	 * Indicated, that this exchange retransmission reached the timeout.
 	 * 
 	 * @return {@code true}, transmission reached timeout, {@code false},
@@ -1315,6 +1328,19 @@ public class Exchange {
 		}
 		this.relation = relation;
 		notifications = new ArrayList<NotificationKeyMID>();
+	}
+
+	/**
+	 * Reset transmission of observe relation.
+	 * 
+	 * @param relation observe relation
+	 * @since 3.14
+	 */
+	public void resetRelationTransmission(ObserveRelation relation) {
+		assertOwner();
+		if (this.relation == relation) {
+			this.failedTransmissionCount = 0;
+		}
 	}
 
 	/**

@@ -15,10 +15,6 @@
  ******************************************************************************/
 package org.eclipse.californium.scandium;
 
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-
 import org.eclipse.californium.elements.util.CounterStatisticManager;
 import org.eclipse.californium.elements.util.NoPublicAPI;
 import org.eclipse.californium.elements.util.SimpleCounterStatistic;
@@ -30,8 +26,7 @@ import org.slf4j.LoggerFactory;
  * Health implementation using counter and logging for results.
  */
 @NoPublicAPI
-public class DtlsHealthLogger extends CounterStatisticManager
-		implements DtlsHealth, DtlsHealthExtended, DtlsHealthExtended2 {
+public class DtlsHealthLogger extends CounterStatisticManager implements DtlsHealth {
 
 	/** the logger. */
 	private static final Logger LOGGER = LoggerFactory.getLogger(DTLSConnector.class.getCanonicalName() + ".health");
@@ -43,10 +38,11 @@ public class DtlsHealthLogger extends CounterStatisticManager
 	 */
 	public static final String DROPPED_UDP_MESSAGES = "dropped udp messages";
 
-	private final AtomicInteger pendingHandshakes = new AtomicInteger();
+	private volatile int maxConnections = 0;
 
 	protected final SimpleCounterStatistic.AlignGroup align = new SimpleCounterStatistic.AlignGroup();
-	private final SimpleCounterStatistic connections = new SimpleCounterStatistic("connections", align);
+	private final SimpleCounterStatistic connections = new SimpleCounterStatistic("associations", align);
+	private final SimpleCounterStatistic pendingHandshakes = new SimpleCounterStatistic("handshakes pending", align);
 	private final SimpleCounterStatistic succeededHandshakes = new SimpleCounterStatistic("handshakes succeeded",
 			align);
 	private final SimpleCounterStatistic failedHandshakes = new SimpleCounterStatistic("handshakes failed", align);
@@ -63,6 +59,10 @@ public class DtlsHealthLogger extends CounterStatisticManager
 	private final SimpleCounterStatistic pendingOutgoing = new SimpleCounterStatistic("pending out jobs", align);
 	private final SimpleCounterStatistic pendingHandshakeJobs = new SimpleCounterStatistic("pending handshake jobs",
 			align);
+	private final SimpleCounterStatistic missingAuthorizations = new SimpleCounterStatistic(
+			"application missing authorizations", align);
+	private final SimpleCounterStatistic rejectedAuthorizations = new SimpleCounterStatistic(
+			"application rejected authorizations", align);
 
 	/**
 	 * Create passive dtls health logger.
@@ -81,26 +81,9 @@ public class DtlsHealthLogger extends CounterStatisticManager
 		init();
 	}
 
-	/**
-	 * Create active dtls health logger with logging tag.
-	 * 
-	 * @param tag logging tag
-	 * @param interval interval. {@code 0} to disable actively calling
-	 *            {@link #dump()}.
-	 * @param unit time unit of interval
-	 * @param executor executor to schedule active calls of {@link #dump()}.
-	 * @throws NullPointerException if executor is {@code null}
-	 * @since 3.0 (added unit)
-	 * @deprecated use {@link DtlsHealthLogger#DtlsHealthLogger(String)} instead
-	 *             and call {@link #dump()} externally.
-	 */
-	public DtlsHealthLogger(String tag, int interval, TimeUnit unit, ScheduledExecutorService executor) {
-		super(tag, interval, unit, executor);
-		init();
-	}
-
 	private void init() {
 		add(connections);
+		add(pendingHandshakes);
 		add(succeededHandshakes);
 		add(failedHandshakes);
 		add(receivedRecords);
@@ -112,6 +95,8 @@ public class DtlsHealthLogger extends CounterStatisticManager
 		add(pendingIncoming);
 		add(pendingOutgoing);
 		add(pendingHandshakeJobs);
+		add(missingAuthorizations);
+		add(rejectedAuthorizations);
 	}
 
 	@Override
@@ -122,8 +107,11 @@ public class DtlsHealthLogger extends CounterStatisticManager
 					String eol = StringUtil.lineSeparator();
 					String head = "   " + tag;
 					StringBuilder log = new StringBuilder();
+					long remainingCapacity = maxConnections - connections.getCounter();
 					log.append(tag).append("dtls statistic:").append(eol);
-					log.append(head).append(connections).append(eol);
+					log.append(head).append(connections).append(" (").append(remainingCapacity)
+							.append(" remaining capacity).").append(eol);
+					log.append(head).append(pendingHandshakes).append(eol);
 					log.append(head).append(succeededHandshakes).append(eol);
 					log.append(head).append(failedHandshakes).append(eol);
 					log.append(head).append(sentRecords).append(eol);
@@ -137,50 +125,10 @@ public class DtlsHealthLogger extends CounterStatisticManager
 					log.append(eol).append(head).append(pendingIncoming);
 					log.append(eol).append(head).append(pendingOutgoing);
 					log.append(eol).append(head).append(pendingHandshakeJobs);
-					dump(head, log);
-					LOGGER.debug("{}", log);
-				}
-				transferCounter();
-			}
-		} catch (Throwable e) {
-			LOGGER.error("{}", tag, e);
-		}
-	}
-
-	public void dump(String tag, int maxConnections, int remainingCapacity, int pendingWithoutVerify) {
-		try {
-			if (isEnabled()) {
-				connections.transferCounter();
-				connections.set(maxConnections - remainingCapacity);
-				if (isUsed() && LOGGER.isDebugEnabled()) {
-					String eol = StringUtil.lineSeparator();
-					String head = "   " + tag;
-					String associations = "associations";
-					String handshakes = "handshakes pending";
-					align.add(associations);
-					align.add(handshakes);
-					StringBuilder log = new StringBuilder();
-					log.append(tag).append("dtls statistic:").append(eol);
-					String msg = SimpleCounterStatistic.format(align.getAlign(), associations,
-							maxConnections - remainingCapacity);
-					log.append(head).append(msg);
-					log.append(" (").append(remainingCapacity).append(" remaining capacity).").append(eol);
-					msg = SimpleCounterStatistic.format(align.getAlign(), handshakes, pendingHandshakes.get());
-					log.append(head).append(msg);
-					log.append(" (").append(pendingWithoutVerify).append(" without verify).").append(eol);
-					log.append(head).append(succeededHandshakes).append(eol);
-					log.append(head).append(failedHandshakes).append(eol);
-					log.append(head).append(sentRecords).append(eol);
-					log.append(head).append(droppedSentRecords).append(eol);
-					log.append(head).append(receivedRecords).append(eol);
-					log.append(head).append(droppedReceivedRecords).append(eol);
-					log.append(head).append(droppedReceivedMacErrors);
-					if (droppedMessages.isStarted()) {
-						log.append(eol).append(head).append(droppedMessages);
+					if (rejectedAuthorizations.isStarted() || missingAuthorizations.isStarted()) {
+						log.append(eol).append(head).append(missingAuthorizations);
+						log.append(eol).append(head).append(rejectedAuthorizations);
 					}
-					log.append(eol).append(head).append(pendingIncoming);
-					log.append(eol).append(head).append(pendingOutgoing);
-					log.append(eol).append(head).append(pendingHandshakeJobs);
 					dump(head, log);
 					LOGGER.debug("{}", log);
 				}
@@ -222,12 +170,12 @@ public class DtlsHealthLogger extends CounterStatisticManager
 
 	@Override
 	public void startHandshake() {
-		pendingHandshakes.incrementAndGet();
+		pendingHandshakes.increment();
 	}
 
 	@Override
 	public void endHandshake(boolean success) {
-		pendingHandshakes.decrementAndGet();
+		pendingHandshakes.decrement();
 		if (success) {
 			succeededHandshakes.increment();
 		} else {
@@ -259,6 +207,11 @@ public class DtlsHealthLogger extends CounterStatisticManager
 	}
 
 	@Override
+	public void setMaxConnections(int max) {
+		maxConnections = max;
+	}
+
+	@Override
 	public void setConnections(int count) {
 		connections.set(count);
 	}
@@ -278,4 +231,12 @@ public class DtlsHealthLogger extends CounterStatisticManager
 		pendingHandshakeJobs.set(count);
 	}
 
+	@Override
+	public void applicationAuthorizationRejected(boolean rejected) {
+		if (rejected) {
+			rejectedAuthorizations.increment();
+		} else {
+			missingAuthorizations.increment();
+		}
+	}
 }

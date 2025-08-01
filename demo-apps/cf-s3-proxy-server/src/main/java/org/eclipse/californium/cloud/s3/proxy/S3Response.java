@@ -15,6 +15,7 @@
 package org.eclipse.californium.cloud.s3.proxy;
 
 import java.io.InputStream;
+import java.util.Map;
 
 /**
  * S3 response.
@@ -40,30 +41,42 @@ public class S3Response {
 	 */
 	private final String contentType;
 	/**
+	 * Content length.
+	 */
+	private final Long contentLength;
+	/**
 	 * Timestamp.
 	 */
 	private final Long timestamp;
+	/**
+	 * Map of meta data.
+	 */
+	private final Map<String, String> meta;
 
 	/**
-	 * Create S3 response.
+	 * Creates S3 response.
 	 * 
 	 * @param httpStatusCode http status code
 	 * @param content content as string
 	 * @param contentAsStream content as input stream
 	 * @param contentType content type
+	 * @param contentLength content length
 	 * @param timestamp timestamp
+	 * @param meta map of meta data
 	 */
 	public S3Response(int httpStatusCode, String content, InputStream contentAsStream, String contentType,
-			Long timestamp) {
+			Long contentLength, Long timestamp, Map<String, String> meta) {
 		this.httpStatusCode = httpStatusCode;
 		this.content = content;
 		this.contentAsStream = contentAsStream;
 		this.contentType = contentType;
+		this.contentLength = contentLength;
 		this.timestamp = timestamp;
+		this.meta = meta;
 	}
 
 	/**
-	 * Get http status code.
+	 * Gets http status code.
 	 * 
 	 * @return http status code.
 	 */
@@ -72,7 +85,7 @@ public class S3Response {
 	}
 
 	/**
-	 * Get content.
+	 * Gets content.
 	 * 
 	 * @return content
 	 */
@@ -81,7 +94,7 @@ public class S3Response {
 	}
 
 	/**
-	 * Get content as stream.
+	 * Gets content as stream.
 	 * 
 	 * @return content as stream
 	 */
@@ -90,7 +103,7 @@ public class S3Response {
 	}
 
 	/**
-	 * Get content type.
+	 * Gets content type.
 	 * 
 	 * @return content type
 	 */
@@ -99,16 +112,34 @@ public class S3Response {
 	}
 
 	/**
-	 * Get content type.
+	 * Gets content length.
 	 * 
-	 * @return content type
+	 * @return content length
+	 */
+	public Long getContentLength() {
+		return contentLength;
+	}
+
+	/**
+	 * Gets timestamp of last update.
+	 * 
+	 * @return timestamp of last update
 	 */
 	public Long getTimestamp() {
 		return timestamp;
 	}
 
 	/**
-	 * Create S3-request-builder.
+	 * Gets map of meta data.
+	 * 
+	 * @return map of meta data.
+	 */
+	public Map<String, String> getMetadata() {
+		return meta;
+	}
+
+	/**
+	 * Creates S3 response builder.
 	 * 
 	 * @return created builder
 	 */
@@ -117,17 +148,17 @@ public class S3Response {
 	}
 
 	/**
-	 * Create S3-request-builder from S3-request.
+	 * Creates S3 response builder from S3 response.
 	 * 
-	 * @param request S3-request.
+	 * @param response S3-response.
 	 * @return created builder
 	 */
-	public static Builder builder(S3Response request) {
-		return new Builder(request);
+	public static Builder builder(S3Response response) {
+		return new Builder(response);
 	}
 
 	/**
-	 * S3-request-builder.
+	 * S3 response builder.
 	 */
 	public static class Builder {
 
@@ -138,22 +169,30 @@ public class S3Response {
 		/**
 		 * Content.
 		 */
-		private String content;
+		protected String content;
 		/**
 		 * Content as stream.
 		 */
-		private InputStream contentAsStream;
+		protected InputStream contentAsStream;
 		/**
 		 * Content type.
 		 */
-		private String contentType;
+		protected String contentType;
+		/**
+		 * Content length.
+		 */
+		protected Long contentLength;
 		/**
 		 * Timestamp.
 		 */
-		private Long timestamp;
+		protected Long timestamp;
+		/**
+		 * Map of meta data.
+		 */
+		protected Map<String, String> meta;
 
 		/**
-		 * Create S3-request-builder.
+		 * Create S3 response builder.
 		 */
 		protected Builder() {
 		}
@@ -168,11 +207,13 @@ public class S3Response {
 			this.content = response.content;
 			this.contentAsStream = response.contentAsStream;
 			this.contentType = response.contentType;
+			this.contentLength = response.contentLength;
 			this.timestamp = response.timestamp;
+			this.meta = response.meta;
 		}
 
 		/**
-		 * Set http status code.
+		 * Sets http status code.
 		 * 
 		 * @param httpStatusCode http status code
 		 * @return builder for command chaining
@@ -183,7 +224,7 @@ public class S3Response {
 		}
 
 		/**
-		 * Set content.
+		 * Sets content.
 		 * 
 		 * @param content content.
 		 * @return builder for command chaining
@@ -194,7 +235,7 @@ public class S3Response {
 		}
 
 		/**
-		 * Set content.
+		 * Sets content.
 		 * 
 		 * @param content content as stream.
 		 * @return builder for command chaining
@@ -205,7 +246,7 @@ public class S3Response {
 		}
 
 		/**
-		 * Set content type.
+		 * Sets content type.
 		 * 
 		 * @param contentType content type.
 		 * @return builder for command chaining
@@ -216,7 +257,18 @@ public class S3Response {
 		}
 
 		/**
-		 * Set timestamp.
+		 * Sets content length.
+		 * 
+		 * @param contentLength content length.
+		 * @return builder for command chaining
+		 */
+		public Builder contentLength(Long contentLength) {
+			this.contentLength = contentLength;
+			return this;
+		}
+
+		/**
+		 * Sets timestamp.
 		 * 
 		 * @param timestamp timestamp.
 		 * @return builder for command chaining
@@ -227,12 +279,24 @@ public class S3Response {
 		}
 
 		/**
+		 * Sets map of meta data.
+		 * 
+		 * @param meta map of meta data.
+		 * @return builder for command chaining
+		 */
+		public Builder meta(Map<String, String> meta) {
+			this.meta = meta;
+			return this;
+		}
+
+		/**
 		 * Creates S3 response.
 		 * 
 		 * @return S3 response
 		 */
 		public S3Response build() {
-			return new S3Response(httpStatusCode, content, contentAsStream, contentType, timestamp);
+			return new S3Response(httpStatusCode, content, contentAsStream, contentType, contentLength, timestamp,
+					meta);
 		}
 	}
 }

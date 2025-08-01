@@ -14,6 +14,8 @@
  ********************************************************************************/
 package org.eclipse.californium.cloud.s3.proxy;
 
+import java.util.Set;
+
 /**
  * S3 proxy client provider.
  * 
@@ -22,7 +24,15 @@ package org.eclipse.californium.cloud.s3.proxy;
 public interface S3ProxyClientProvider {
 
 	/**
-	 * Get S3 proxy client for domain.
+	 * Gets domains.
+	 * 
+	 * @return set of domain names.
+	 * @since 3.13
+	 */
+	Set<String> getDomains();
+
+	/**
+	 * Gets S3 proxy client for domain.
 	 * 
 	 * @param domain domain name
 	 * @return S3 proxy client, or {@code null}, if not available.
@@ -30,7 +40,7 @@ public interface S3ProxyClientProvider {
 	S3ProxyClient getProxyClient(String domain);
 
 	/**
-	 * Get S3 proxy client for web resources.
+	 * Gets S3 proxy client for web resources.
 	 * 
 	 * @return S3 proxy client for web resources
 	 */

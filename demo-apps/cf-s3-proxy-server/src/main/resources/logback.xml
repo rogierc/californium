@@ -9,10 +9,10 @@
 	</appender>
 
 	<appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-		<file>logs/anonymorigin.log</file>
+		<file>logs/app.log</file>
 		<rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
 			<!-- roll-over monthly, or if filesize exceeds -->
-			<fileNamePattern>logs/anonymorigin-%d{yyyy-MM}.%i.log</fileNamePattern>
+			<fileNamePattern>logs/app-%d{yyyy-MM}.%i.log</fileNamePattern>
 			<!-- each file should be at most 10MB, keep 200 files worth of history, but at most 2GB -->
 			<maxFileSize>5MB</maxFileSize>
 			<maxHistory>200</maxHistory>
@@ -70,6 +70,9 @@
 	<logger name="org.eclipse.californium.core.observe.ObserveStatisticLogger" level="INFO" additivity="false">
 		<appender-ref ref="STDOUT" />
 	</logger>
+	<logger name="org.eclipse.californium.cloud.s3.proxy.S3ProcessorHealthLogger" level="INFO" additivity="false">
+		<appender-ref ref="STDOUT" />
+	</logger>
 	<logger name="org.eclipse.californium.unixhealth" level="INFO" additivity="false">
 		<appender-ref ref="STDOUT" />
 	</logger>
@@ -84,6 +87,9 @@
 		<appender-ref ref="STDOUT" />
 	</logger>
 	<logger name="org.eclipse.californium.cloud.s3.http" level="DEBUG" additivity="false">
+		<appender-ref ref="STDOUT" />
+	</logger>
+	<logger name="org.eclipse.californium.cloud.s3.forward" level="INFO" additivity="false">
 		<appender-ref ref="STDOUT" />
 	</logger>
 	<logger name="org.eclipse.californium.proxy2.http.Coap2HttpProxy" level="DEBUG" additivity="false">

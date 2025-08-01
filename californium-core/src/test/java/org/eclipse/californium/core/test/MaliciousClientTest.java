@@ -23,12 +23,12 @@ import static org.hamcrest.CoreMatchers.nullValue;
 import static org.hamcrest.MatcherAssert.assertThat;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.californium.TestTools;
 import org.eclipse.californium.core.CoapServer;
-import org.eclipse.californium.core.coap.BlockOption;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.coap.CoAP.Type;
 import org.eclipse.californium.core.coap.CoAPOptionException;
@@ -36,6 +36,7 @@ import org.eclipse.californium.core.coap.Message;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.coap.TestOption;
+import org.eclipse.californium.core.coap.option.BlockOption;
 import org.eclipse.californium.core.coap.option.StandardOptionRegistry;
 import org.eclipse.californium.core.network.CoapEndpoint;
 import org.eclipse.californium.core.network.Endpoint;
@@ -293,7 +294,7 @@ public class MaliciousClientTest {
 	 */
 	@Test
 	public void testBertRequest() throws Exception {
-		BlockOption block = new BlockOption(BlockOption.BERT_SZX, false, 0);
+		BlockOption block = StandardOptionRegistry.BLOCK2.create(BlockOption.BERT_SZX, false, 0);
 		Request get = newGet();
 		get.setConfirmable(true);
 		get.getOptions().setBlock2(block);
@@ -305,6 +306,73 @@ public class MaliciousClientTest {
 		Response response = waitForResponse(1000);
 		assertThat("Response missing", response, is(notNullValue()));
 		assertThat("No BAD_REREQUEST response", response.getCode(), is(ResponseCode.BAD_REQUEST));
+	}
+
+	/**
+	 * Malformed CON request.
+	 * 
+	 * Standard processing, responds with BAD_OPTION.
+	 * 
+	 * @throws Exception if an error occurs
+	 */
+	@Test
+	public void testConRequestWithUnknownMethodCode() throws Exception {
+		byte code = 0b00001000; // 0.08 is currently unassigned
+		Request get = newGet();
+
+		DataSerializer serializer = new UdpDataSerializer();
+		RawData rawData = serializer.serializeRequest(get);
+		// tweak the method code
+		rawData.getBytes()[1] = code;
+		clientConnector.send(rawData);
+
+		assertStatisticCounter(healthStatistic, "recv-malformed", is(1L), 1000, TimeUnit.MILLISECONDS);
+		Response response = waitForResponse(1000);
+		assertThat("expected response", response, is(notNullValue()));
+		assertThat(response.getCode(), is(ResponseCode.METHOD_NOT_ALLOWED));
+	}
+
+	@Test
+	public void testConRequestWithRepeatedNonRepeatableCriticalOption() throws Exception {
+		Request get = newGet();
+		get.getOptions().setUriPort(5683);
+		DataSerializer serializer = new UdpDataSerializer();
+		RawData rawData = serializer.serializeRequest(get);
+		byte[] data = rawData.getBytes();
+		int pos = data.length;
+		data = Arrays.copyOf(data, pos + 3);
+		data[pos++] = 0x02;
+		data[pos++] = 0x16;
+		data[pos++] = 0x34;
+		rawData = RawData.outbound(data, rawData.getEndpointContext(), null, false);
+
+		clientConnector.send(rawData);
+
+		assertStatisticCounter(healthStatistic, "recv-malformed", is(1L), 1000, TimeUnit.MILLISECONDS);
+		Response response = waitForResponse(1000);
+		assertThat("expected response", response, is(notNullValue()));
+		assertThat(response.getCode(), is(ResponseCode.BAD_OPTION));
+	}
+
+	@Test
+	public void testConRequestWithRepeatedNonRepeatableElectiveOption() throws Exception {
+		Request get = newGet();
+		get.getOptions().setMaxAge(120);
+		DataSerializer serializer = new UdpDataSerializer();
+		RawData rawData = serializer.serializeRequest(get);
+		byte[] data = rawData.getBytes();
+		int pos = data.length;
+		data = Arrays.copyOf(data, pos + 2);
+		data[pos++] = 0x01;
+		data[pos++] = 0x7f;
+		rawData = RawData.outbound(data, rawData.getEndpointContext(), null, false);
+
+		clientConnector.send(rawData);
+
+		Response response = waitForResponse(1000);
+		assertThat("expected response", response, is(notNullValue()));
+		assertThat(response.getCode(), is(ResponseCode.CONTENT));
+		assertStatisticCounter(healthStatistic, "recv-malformed", is(0L));
 	}
 
 	/**
@@ -364,6 +432,27 @@ public class MaliciousClientTest {
 		Response response = newResponse(ResponseCode.CONTENT);
 		response.setType(Type.ACK);
 		response.getOptions().addOtherOption(newOption(StandardOptionRegistry.LOCATION_PATH, 256));
+
+		DataSerializer serializer = new UdpDataSerializer();
+		RawData rawData = serializer.serializeResponse(response);
+		clientConnector.send(rawData);
+
+		assertStatisticCounter(healthStatistic, "recv-malformed", is(1L), 1000, TimeUnit.MILLISECONDS);
+		Message reject = waitForMessage(1000);
+		assertThat("malicous piggybacked response not ignored", reject, is(nullValue()));
+	}
+
+	/**
+	 * Response with two etags.
+	 * 
+	 * @throws Exception if an error occurs
+	 */
+	@Test
+	public void testResponseWithTwoEtags() throws Exception {
+		Response response = newResponse(ResponseCode.CONTENT);
+		response.setType(Type.ACK);
+		response.getOptions().addOtherOption(newOption(StandardOptionRegistry.ETAG, 4));
+		response.getOptions().addOtherOption(newOption(StandardOptionRegistry.ETAG, 6));
 
 		DataSerializer serializer = new UdpDataSerializer();
 		RawData rawData = serializer.serializeResponse(response);

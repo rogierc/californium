@@ -23,12 +23,9 @@ public interface DtlsHealth {
 	/**
 	 * Dump health data.
 	 * 
-	 * @param tag logging tag
-	 * @param maxConnections maximum number of connections
-	 * @param remainingCapacity remaining capacity for connections
-	 * @param pendingWithoutVerify pending handshakes without verification
+	 * @since 4.0 (removed parameter)
 	 */
-	void dump(String tag, int maxConnections, int remainingCapacity, int pendingWithoutVerify);
+	void dump();
 
 	/**
 	 * Check, if collecting health data is enabled.
@@ -65,4 +62,63 @@ public interface DtlsHealth {
 	 *            is to be sent.
 	 */
 	void sendingRecord(boolean drop);
+
+	/**
+	 * Set maximum number of connections.
+	 * 
+	 * @param max maximum number of connections
+	 * 
+	 * @since 4.0
+	 */
+	void setMaxConnections(int max);
+
+	/**
+	 * Set number of connections.
+	 * 
+	 * @param count number of connections
+	 * 
+	 * @since 4.0 (moved from obsolete DtlsHealthExtended)
+	 */
+	void setConnections(int count);
+
+	/**
+	 * Report receiving record with MAC error.
+	 * 
+	 * @since 4.0 (moved from obsolete DtlsHealthExtended2)
+	 */
+	void receivingMacError();
+
+	/**
+	 * Set number of pending incoming jobs.
+	 * 
+	 * @param count number of pending incoming jobs
+	 * @since 4.0 (moved from obsolete DtlsHealthExtended2)
+	 */
+	void setPendingIncomingJobs(int count);
+
+	/**
+	 * Set number of pending outgoing jobs.
+	 * 
+	 * @param count number of pending outgoing jobs
+	 * @since 4.0 (moved from obsolete DtlsHealthExtended2)
+	 */
+	void setPendingOutgoingJobs(int count);
+
+	/**
+	 * Set number of pending handshake result jobs.
+	 * 
+	 * @param count number of pending handshake result jobs
+	 * @since 4.0 (moved from obsolete DtlsHealthExtended2)
+	 */
+	void setPendingHandshakeJobs(int count);
+
+	/**
+	 * Report missing application authorization.
+	 * 
+	 * @param rejected {@code true}, if authorization was rejected,
+	 *            {@code false}, if the authorization is missing after a
+	 *            timeout.
+	 * @since 4.0
+	 */
+	void applicationAuthorizationRejected(boolean rejected);
 }

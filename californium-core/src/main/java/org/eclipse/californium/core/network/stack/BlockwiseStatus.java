@@ -28,8 +28,8 @@ package org.eclipse.californium.core.network.stack;
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
 
-import org.eclipse.californium.core.coap.BlockOption;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
+import org.eclipse.californium.core.coap.option.BlockOption;
 import org.eclipse.californium.core.coap.Message;
 import org.eclipse.californium.core.coap.MessageObserver;
 import org.eclipse.californium.core.coap.MessageObserverAdapter;
@@ -240,7 +240,6 @@ public abstract class BlockwiseStatus {
 
 	/**
 	 * Marks the transfer as complete.
-	 * <p>
 	 * 
 	 * @param complete {@code true} if all blocks have been transferred.
 	 */
@@ -250,7 +249,6 @@ public abstract class BlockwiseStatus {
 
 	/**
 	 * Marks the transfer as complete, if not already completed.
-	 * <p>
 	 * 
 	 * @return {@code true}, if the transfer is completed, {@code false}, if the
 	 *         transfer was already completed.

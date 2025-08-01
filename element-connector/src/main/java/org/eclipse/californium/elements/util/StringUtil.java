@@ -23,7 +23,6 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
-import java.lang.reflect.Method;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -36,8 +35,10 @@ import java.nio.CharBuffer;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CoderResult;
 import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.security.PublicKey;
 import java.security.cert.Certificate;
+import java.util.Base64;
 import java.util.regex.Pattern;
 
 /**
@@ -70,11 +71,6 @@ public class StringUtil {
 	public static final String lineSeparator = System.getProperty("line.separator");
 
 	/**
-	 * Flag indicating, that InetSocketAddress supports "getHostString".
-	 */
-	public static final boolean SUPPORT_HOST_STRING;
-
-	/**
 	 * Californium version. {@code null}, if not available.
 	 * 
 	 * @since 2.2
@@ -102,14 +98,6 @@ public class StringUtil {
 			TABS[i] = tab;
 			tab += "\t";
 		}
-		boolean support = false;
-		try {
-			Method method = InetSocketAddress.class.getMethod("getHostString");
-			support = method != null;
-		} catch (NoSuchMethodException e) {
-			// android before API 18
-		}
-		SUPPORT_HOST_STRING = support;
 		String version = null;
 		Package pack = StringUtil.class.getPackage();
 		if (pack != null) {
@@ -121,33 +109,6 @@ public class StringUtil {
 			}
 		}
 		CALIFORNIUM_VERSION = version;
-	}
-
-	/**
-	 * Get host string of inet socket address.
-	 * 
-	 * @param socketAddress inet socket address.
-	 * @return host string
-	 * @since 3.0 (changed scope to public)
-	 */
-	public static String toHostString(InetSocketAddress socketAddress) {
-		if (SUPPORT_HOST_STRING) {
-			return socketAddress.getHostString();
-		} else {
-			InetAddress address = socketAddress.getAddress();
-			if (address != null) {
-				String textAddress = address.toString();
-				if (textAddress.startsWith("/")) {
-					// unresolved, return literal IP
-					return textAddress.substring(1);
-				} else {
-					// resolved, safe to call getHostName
-					return address.getHostName();
-				}
-			} else {
-				return socketAddress.getHostName();
-			}
-		}
 	}
 
 	/**
@@ -346,9 +307,11 @@ public class StringUtil {
 	 * 
 	 * @param base64 base64 string
 	 * @return byte array. empty, if provided string could not be decoded.
-	 * @throws IllegalArgumentException if the length is invalid for base 64
+	 * @throws IllegalArgumentException if the length or content is invalid for
+	 *             base 64
 	 * @see #base64ToByteArray(char[])
-	 * @since 2.3
+	 * @since 4.0 (throws IllegalArgumentException if content is invalid base
+	 *        64)
 	 */
 	public static byte[] base64ToByteArray(String base64) {
 		int pad = base64.length() % 4;
@@ -362,11 +325,7 @@ public class StringUtil {
 				throw new IllegalArgumentException("'" + base64 + "' invalid base64!");
 			}
 		}
-		try {
-			return Base64.decode(base64);
-		} catch (IOException e) {
-			return Bytes.EMPTY;
-		}
+		return Base64.getDecoder().decode(base64);
 	}
 
 	/**
@@ -378,9 +337,10 @@ public class StringUtil {
 	 * 
 	 * @param base64 base64 char array
 	 * @return byte array.
-	 * @throws IllegalArgumentException if the length is invalid for base 64 or
-	 *             character is out of the supported character set of base 64.
-	 * @since 3.3
+	 * @throws IllegalArgumentException if the length or content is invalid for
+	 *             base 64.
+	 * @since 4.0 (throws IllegalArgumentException if content is invalid base
+	 *        64)
 	 */
 	public static byte[] base64ToByteArray(char[] base64) {
 		int pad = base64.length % 4;
@@ -403,11 +363,7 @@ public class StringUtil {
 			--pad;
 			data64[index++] = (byte) '=';
 		}
-		try {
-			return Base64.decode(data64);
-		} catch (IOException e) {
-			throw new IllegalArgumentException(e.getMessage());
-		}
+		return Base64.getDecoder().decode(data64);
 	}
 
 	/**
@@ -418,7 +374,7 @@ public class StringUtil {
 	 * @since 2.3
 	 */
 	public static String byteArrayToBase64(byte[] bytes) {
-		return Base64.encodeBytes(bytes);
+		return Base64.getEncoder().encodeToString(bytes);
 	}
 
 	/**
@@ -429,7 +385,7 @@ public class StringUtil {
 	 * @since 3.3
 	 */
 	public static char[] byteArrayToBase64CharArray(byte[] bytes) {
-		byte[] base64 = Base64.encodeBytesToBytes(bytes);
+		byte[] base64 = Base64.getEncoder().encode(bytes);
 		char[] result = new char[base64.length];
 		for (int index = 0; index < base64.length; ++index) {
 			result[index] = (char) base64[index];
@@ -720,17 +676,7 @@ public class StringUtil {
 		if (address == null) {
 			return null;
 		}
-		String host;
-		if (SUPPORT_HOST_STRING) {
-			host = toHostString(address);
-		} else {
-			InetAddress addr = address.getAddress();
-			if (addr != null) {
-				host = toString(addr);
-			} else {
-				host = "<unresolved>";
-			}
-		}
+		String host = address.getHostString();
 		if (address.getAddress() instanceof Inet6Address) {
 			return "[" + host + "]:" + address.getPort();
 		} else {
@@ -775,7 +721,7 @@ public class StringUtil {
 		if (addr != null && addr.isAnyLocalAddress()) {
 			return "port " + address.getPort();
 		}
-		String name = SUPPORT_HOST_STRING ? toHostString(address) : "";
+		String name = address.getHostString();
 		String host = (addr != null) ? toString(addr) : "<unresolved>";
 		if (name.equals(host)) {
 			name = "";

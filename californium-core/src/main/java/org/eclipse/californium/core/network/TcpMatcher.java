@@ -49,13 +49,13 @@
 package org.eclipse.californium.core.network;
 
 import java.util.concurrent.Executor;
+import java.util.function.BiConsumer;
 
 import org.eclipse.californium.core.coap.EmptyMessage;
 import org.eclipse.californium.core.coap.MessageObserverAdapter;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.coap.Token;
-import org.eclipse.californium.core.observe.NotificationListener;
 import org.eclipse.californium.core.observe.ObservationStore;
 import org.eclipse.californium.core.observe.ObserveRelation;
 import org.eclipse.californium.elements.EndpointContext;
@@ -73,7 +73,12 @@ import org.slf4j.LoggerFactory;
 public final class TcpMatcher extends BaseMatcher {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(TcpMatcher.class);
-	private final RemoveHandler exchangeRemoveHandler = new RemoveHandlerImpl();
+	private final RemoveHandler exchangeRemoveHandler = (exchange, keyToken, keyMID) -> {
+		if (keyToken != null) {
+			exchangeStore.remove(keyToken, exchange);
+		}
+		// ignore key, MID is not used for TCP!
+	};
 	private final EndpointContextMatcher endpointContextMatcher;
 
 	/**
@@ -94,7 +99,7 @@ public final class TcpMatcher extends BaseMatcher {
 	 * @throws NullPointerException if any of the parameters is {@code null}.
 	 * @since 3.0 (changed parameter to Configuration, moved executor to end of parameter list)
 	 */
-	public TcpMatcher(Configuration config, NotificationListener notificationListener, TokenGenerator tokenGenerator,
+	public TcpMatcher(Configuration config, BiConsumer<Request, Response> notificationListener, TokenGenerator tokenGenerator,
 			ObservationStore observationStore, MessageExchangeStore exchangeStore, EndpointContextMatcher endpointContextMatcher,
 			Executor executor) {
 		super(config, notificationListener, tokenGenerator, observationStore, exchangeStore, endpointContextMatcher, executor);
@@ -236,16 +241,5 @@ public final class TcpMatcher extends BaseMatcher {
 	private void cancel(Response response, EndpointReceiver receiver) {
 		response.setCanceled(true);
 		receiver.receiveResponse(null, response);
-	}
-
-	private class RemoveHandlerImpl implements RemoveHandler {
-
-		@Override
-		public void remove(Exchange exchange, KeyToken keyToken, KeyMID keyMID) {
-			if (keyToken != null) {
-				exchangeStore.remove(keyToken, exchange);
-			}
-			// ignore key, MID is not used for TCP!
-		}
 	}
 }

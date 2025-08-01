@@ -18,9 +18,9 @@ package org.eclipse.californium.plugtests.resources;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.*;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.*;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.coap.Request;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 
 
 /**
@@ -32,6 +32,7 @@ public class Separate extends CoapResource {
 	public Separate() {
 		super("separate");
 		getAttributes().setTitle("Resource which cannot be served immediately and which cannot be acknowledged in a piggy-backed way");
+		addSupportedContentFormats(TEXT_PLAIN);
 	}
 
 	@Override

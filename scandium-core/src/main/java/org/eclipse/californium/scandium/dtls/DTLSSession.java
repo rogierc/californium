@@ -67,6 +67,7 @@ import org.eclipse.californium.elements.util.SerializationUtil.SupportedVersions
 import org.eclipse.californium.scandium.auth.PrincipalSerializer;
 import org.eclipse.californium.scandium.dtls.cipher.CipherSuite;
 import org.eclipse.californium.scandium.dtls.cipher.PseudoRandomFunction;
+import org.eclipse.californium.scandium.dtls.cipher.RandomManager;
 import org.eclipse.californium.scandium.dtls.cipher.CipherSuite.KeyExchangeAlgorithm;
 import org.eclipse.californium.scandium.dtls.cipher.PseudoRandomFunction.Label;
 import org.eclipse.californium.scandium.dtls.cipher.XECDHECryptography.SupportedGroup;
@@ -78,7 +79,7 @@ import org.eclipse.californium.scandium.util.ServerNames;
 
 /**
  * Represents a DTLS session between two peers.
- * 
+ * <p>
  * Keeps track of the negotiated parameter.
  */
 public final class DTLSSession implements Destroyable {
@@ -90,10 +91,15 @@ public final class DTLSSession implements Destroyable {
 	 * An arbitrary byte sequence chosen by the server to identify this session.
 	 */
 	private SessionId sessionIdentifier = SessionId.emptySessionId();
+	/**
+	 * An alternative transient ID, if the {@link DTLSSession#sessionIdentifier}
+	 * is empty by intention.
+	 */
+	private Bytes hostInternalIdentifier;
 
 	/**
 	 * Protocol version.
-	 * 
+	 * <p>
 	 * Only {@link ProtocolVersion#VERSION_DTLS_1_2} is supported.
 	 * 
 	 * @since 3.0
@@ -146,7 +152,7 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Use extended master secret.
-	 * 
+	 * <p>
 	 * See <a href="https://tools.ietf.org/html/rfc7627" target="_blank">RFC 7627</a>.
 	 * 
 	 * @since 3.0
@@ -154,10 +160,10 @@ public final class DTLSSession implements Destroyable {
 	private boolean extendedMasterSecret;
 	/**
 	 * Use secure renegotiation.
-	 * 
+	 * <p>
 	 * Californium doesn't support renegotiation at all, but RFC5746 requests to
 	 * update to a minimal version of RFC 5746.
-	 * 
+	 * <p>
 	 * See <a href="https://tools.ietf.org/html/rfc5746" target="_blank">RFC
 	 * 5746</a> for additional details.
 	 * 
@@ -220,7 +226,7 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Sets session.
-	 * 
+	 * <p>
 	 * Sets all fields of this session from the values of the provided session.
 	 * 
 	 * @param session session to set
@@ -268,7 +274,7 @@ public final class DTLSSession implements Destroyable {
 	/**
 	 * Gets this session's identifier.
 	 * 
-	 * @return the identifier or {@code null} if this session does not have an
+	 * @return the identifier. May be empty, if this session does not have an
 	 *         identifier (yet).
 	 */
 	public SessionId getSessionIdentifier() {
@@ -277,7 +283,7 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Sets the session identifier.
-	 * 
+	 * <p>
 	 * Resets the {@link #masterSecret}, if the session identifier is changed.
 	 * 
 	 * @param sessionIdentifier new session identifier
@@ -295,6 +301,7 @@ public final class DTLSSession implements Destroyable {
 			SecretUtil.destroy(this.masterSecret);
 			this.masterSecret = null;
 			this.sessionIdentifier = sessionIdentifier;
+			this.hostInternalIdentifier = null;
 		} else {
 			throw new IllegalArgumentException("no new session identifier?");
 		}
@@ -302,7 +309,7 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Gets protocol version.
-	 * 
+	 * <p>
 	 * Only {@link ProtocolVersion#VERSION_DTLS_1_2} is supported.
 	 * 
 	 * @return protocol version.
@@ -314,7 +321,7 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Sets protocol version.
-	 * 
+	 * <p>
 	 * Only {@link ProtocolVersion#VERSION_DTLS_1_2} is supported.
 	 * 
 	 * @param protocolVersion protocol version
@@ -424,8 +431,18 @@ public final class DTLSSession implements Destroyable {
 	 * @param attributes attributes to add the entries
 	 */
 	public void addEndpointContext(MapBasedEndpointContext.Attributes attributes) {
-		Bytes id = sessionIdentifier.isEmpty() ? new Bytes(("TIME:" + Long.toString(creationTime)).getBytes())
-				: sessionIdentifier;
+		Bytes id = sessionIdentifier;
+		if (id.isEmpty()) {
+			if (hostInternalIdentifier == null) {
+				byte[] tag = ("TIME:" + Long.toString(creationTime)).getBytes();
+				int fill = 24 - tag.length;
+				if (fill > 0) {
+					tag = Bytes.concatenate(tag, Bytes.createBytes(RandomManager.currentSecureRandom(), fill));
+				}
+				hostInternalIdentifier= new Bytes(tag);
+			}
+			id = hostInternalIdentifier;
+		}
 		attributes.add(DtlsEndpointContext.KEY_SESSION_ID, id);
 		attributes.add(DtlsEndpointContext.KEY_CIPHER, cipherSuite.name());
 		if (extendedMasterSecret) {
@@ -438,7 +455,6 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Gets the cipher suite to be used for this session.
-	 * <p>
 	 * 
 	 * @return the cipher suite to be used
 	 */
@@ -448,7 +464,6 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Gets the cipher suites to be used for resumption.
-	 * <p>
 	 * 
 	 * @return the cipher suites for resumption
 	 * @since 3.13
@@ -463,7 +478,6 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Sets the cipher suite to be used for this session.
-	 * <p>
 	 * 
 	 * @param cipherSuite the cipher suite to be used
 	 * @throws NullPointerException if the given cipher suite is {@code null}
@@ -523,7 +537,7 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Set use extended master secret.
-	 * 
+	 * <p>
 	 * See <a href="https://tools.ietf.org/html/rfc7627" target="_blank">RFC 7627</a>.
 	 * 
 	 * @param enable {@code true}, to enable the use of the extended master
@@ -537,7 +551,7 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Gets use extended master secret.
-	 * 
+	 * <p>
 	 * See <a href="https://tools.ietf.org/html/rfc7627" target="_blank">RFC 7627</a>.
 	 * 
 	 * @return {@code true}, to enable the use of the extended master secret,
@@ -550,10 +564,10 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Sets secure renegotiation usage.
-	 * 
+	 * <p>
 	 * Californium doesn't support renegotiation at all, but RFC5746 requests to
 	 * update to a minimal version of RFC 5746.
-	 * 
+	 * <p>
 	 * See <a href="https://tools.ietf.org/html/rfc5746" target="_blank">RFC
 	 * 5746</a> for additional details.
 	 * 
@@ -567,10 +581,10 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Gets use secure renegotiation.
-	 * 
+	 * <p>
 	 * Californium doesn't support renegotiation at all, but RFC5746 requests to
 	 * update to a minimal version of RFC 5746.
-	 * 
+	 * <p>
 	 * See <a href="https://tools.ietf.org/html/rfc5746" target="_blank">RFC
 	 * 5746</a> for additional details.
 	 * 
@@ -594,7 +608,7 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Sets the master secret to be use on session resumptions.
-	 * 
+	 * <p>
 	 * Once the master secret has been set, it cannot be changed without
 	 * changing the session id ahead. If the session id is empty, the session
 	 * doesn't support resumption and therefore the master secret is not set.
@@ -737,7 +751,7 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Gets effective fragment limit.
-	 * 
+	 * <p>
 	 * Either {@link #recordSizeLimit}, if received, or
 	 * {@link #maxFragmentLength}.
 	 * 
@@ -792,7 +806,7 @@ public final class DTLSSession implements Destroyable {
 	}
 
 	/**
-	 * Gets the negotiated ec-group to be used for the ECDHE key exchange
+	 * Gets the negotiated ec-group to be used for the ECDHE key exchange.
 	 * message.
 	 * 
 	 * @return negotiated ec-group
@@ -803,7 +817,7 @@ public final class DTLSSession implements Destroyable {
 	}
 
 	/**
-	 * Sets the negotiated ec-group to be used for the ECDHE key exchange
+	 * Sets the negotiated ec-group to be used for the ECDHE key exchange.
 	 * 
 	 * @param ecGroup negotiated ec-group
 	 * @since 3.0
@@ -837,7 +851,7 @@ public final class DTLSSession implements Destroyable {
 
 	@Override
 	public int hashCode() {
-		return sessionIdentifier == null ? (int) creationTime : sessionIdentifier.hashCode();
+		return sessionIdentifier.isEmpty() ? (int) creationTime : sessionIdentifier.hashCode();
 	}
 
 	@Override
@@ -924,9 +938,9 @@ public final class DTLSSession implements Destroyable {
 
 	/**
 	 * Write dtls session state.
-	 * 
-	 * Note: the stream will contain not encrypted critical credentials. It is
-	 * required to protect this data before exporting it.
+	 * <p>
+	 * <b>Note:</b> the stream will contain not encrypted critical credentials.
+	 * It is required to protect this data before exporting it.
 	 * 
 	 * @param writer writer for dtls session state
 	 * @since 3.0

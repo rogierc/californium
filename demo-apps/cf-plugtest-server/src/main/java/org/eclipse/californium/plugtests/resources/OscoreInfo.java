@@ -19,9 +19,9 @@ package org.eclipse.californium.plugtests.resources;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.*;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.TEXT_PLAIN;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.Utils;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.oscore.HashMapCtxDB;
 import org.eclipse.californium.oscore.OSCoreCtx;
 
@@ -41,6 +41,7 @@ public class OscoreInfo extends CoapResource {
 	public OscoreInfo(HashMapCtxDB db, byte[] serverRid) {
 		super("oscoreInfo", true);
 		getAttributes().setTitle("Resource for retreiving the OSCORE security material used by this server");
+		addSupportedContentFormats(TEXT_PLAIN);
 
 		this.db = db;
 		this.serverRid = serverRid;

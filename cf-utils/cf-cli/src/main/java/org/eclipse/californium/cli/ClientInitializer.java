@@ -32,7 +32,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
 
 import javax.crypto.SecretKey;
 
@@ -44,6 +43,7 @@ import org.eclipse.californium.core.network.interceptors.MessageTracer;
 import org.eclipse.californium.elements.Connector;
 import org.eclipse.californium.elements.UDPConnector;
 import org.eclipse.californium.elements.config.Configuration;
+import org.eclipse.californium.elements.util.ProtocolScheduledExecutorService;
 import org.eclipse.californium.elements.util.SslContextUtil.Credentials;
 import org.eclipse.californium.elements.util.StringUtil;
 import org.eclipse.californium.scandium.DTLSConnector;
@@ -59,9 +59,9 @@ import org.eclipse.californium.scandium.dtls.Record;
 import org.eclipse.californium.scandium.dtls.RecordLayer;
 import org.eclipse.californium.scandium.dtls.cipher.CipherSuite;
 import org.eclipse.californium.scandium.dtls.cipher.CipherSuite.KeyExchangeAlgorithm;
-import org.eclipse.californium.scandium.dtls.pskstore.AdvancedPskStore;
+import org.eclipse.californium.scandium.dtls.pskstore.PskStore;
 import org.eclipse.californium.scandium.dtls.x509.SingleCertificateProvider;
-import org.eclipse.californium.scandium.dtls.x509.StaticNewAdvancedCertificateVerifier;
+import org.eclipse.californium.scandium.dtls.x509.StaticCertificateVerifier;
 import org.eclipse.californium.scandium.util.ListUtils;
 import org.eclipse.californium.scandium.util.SecretUtil;
 import org.eclipse.californium.scandium.util.ServerNames;
@@ -221,12 +221,13 @@ public class ClientInitializer {
 	 * {@link EndpointManager}.
 	 * 
 	 * @param config client's config
-	 * @param executor executor service. {@code null}, if no external executor
-	 *            should be used.
+	 * @param executor protocol executor service. {@code null}, if no external
+	 *            executor should be used.
 	 * @throws IOException if an i/o error occurs
 	 */
-	public static void registerEndpoint(ClientBaseConfig config, ExecutorService executor) throws IOException {
-		CoapEndpoint coapEndpoint = createEndpoint(config, null);
+	public static void registerEndpoint(ClientBaseConfig config, ProtocolScheduledExecutorService executor)
+			throws IOException {
+		CoapEndpoint coapEndpoint = createEndpoint(config, executor);
 		coapEndpoint.start();
 		LOGGER.info("endpoint started at {}", coapEndpoint.getAddress());
 		EndpointManager.getEndpointManager().setDefaultEndpoint(coapEndpoint);
@@ -236,13 +237,13 @@ public class ClientInitializer {
 	 * Create endpoint from client's config-arguments.
 	 * 
 	 * @param config client's config
-	 * @param executor executor service. {@code null}, if no external executor
-	 *            should be used.
+	 * @param executor protocol executor service. {@code null}, if no external
+	 *            executor should be used.
 	 * @return created endpoint.
 	 * @throws IllegalArgumentException if scheme is not provided or not
 	 *             supported
 	 */
-	public static CoapEndpoint createEndpoint(ClientBaseConfig config, ExecutorService executor) {
+	public static CoapEndpoint createEndpoint(ClientBaseConfig config, ProtocolScheduledExecutorService executor) {
 
 		String scheme = CoAP.getSchemeFromUri(config.uri);
 		if (scheme != null) {
@@ -256,6 +257,9 @@ public class ClientInitializer {
 					builder.setConnector(connector);
 					builder.setConfiguration(config.configuration);
 					CoapEndpoint endpoint = builder.build();
+					if (executor != null) {
+						endpoint.setExecutor(executor);
+					}
 					if (config.verbose) {
 						endpoint.addInterceptor(new MessageTracer());
 					}
@@ -298,7 +302,7 @@ public class ClientInitializer {
 	public static class UdpConnectorFactory implements CliConnectorFactory {
 
 		@Override
-		public Connector create(ClientBaseConfig clientConfig, ExecutorService executor) {
+		public Connector create(ClientBaseConfig clientConfig, ProtocolScheduledExecutorService executor) {
 			int localPort = clientConfig.localPort == null ? 0 : clientConfig.localPort;
 			return new UDPConnector(new InetSocketAddress(localPort), clientConfig.configuration);
 		}
@@ -357,7 +361,8 @@ public class ClientInitializer {
 			}
 
 			DtlsConnectorConfig.Builder dtlsConfig = DtlsConnectorConfig.builder(config);
-			StaticNewAdvancedCertificateVerifier.Builder verifierBuilder = StaticNewAdvancedCertificateVerifier.builder();
+			StaticCertificateVerifier.Builder verifierBuilder = StaticCertificateVerifier
+					.builder();
 			boolean psk = false;
 			boolean cert = false;
 			List<KeyExchangeAlgorithm> keyExchangeAlgorithms = new ArrayList<KeyExchangeAlgorithm>();
@@ -390,29 +395,33 @@ public class ClientInitializer {
 			}
 			if (cert) {
 				verifierBuilder.setSupportedCertificateTypes(certificateTypes);
-				dtlsConfig.setAdvancedCertificateVerifier(verifierBuilder.build());
+				dtlsConfig.setCertificateVerifier(verifierBuilder.build());
 			}
 
-			if (clientConfig.authentication != null && clientConfig.authentication.credentials != null) {
-				Credentials identity = clientConfig.authentication.credentials;
-				if (certificateTypes.contains(CertificateType.X_509)) {
-					dtlsConfig.setCertificateIdentityProvider(new SingleCertificateProvider(identity.getPrivateKey(),
-							identity.getCertificateChain(), certificateTypes));
-				} else if (certificateTypes.contains(CertificateType.RAW_PUBLIC_KEY)) {
-					dtlsConfig.setCertificateIdentityProvider(
-							new SingleCertificateProvider(identity.getPrivateKey(), identity.getPublicKey()));
+			if (clientConfig.authentication != null) {
+				if (clientConfig.authentication.credentials != null) {
+					Credentials identity = clientConfig.authentication.credentials;
+					if (certificateTypes.contains(CertificateType.X_509)) {
+						dtlsConfig.setCertificateIdentityProvider(new SingleCertificateProvider(
+								identity.getPrivateKey(), identity.getCertificateChain(), certificateTypes));
+					} else if (certificateTypes.contains(CertificateType.RAW_PUBLIC_KEY)) {
+						dtlsConfig.setCertificateIdentityProvider(
+								new SingleCertificateProvider(identity.getPrivateKey(), identity.getPublicKey()));
+					}
+				} else if (keyExchangeAlgorithms.isEmpty()) {
+					ListUtils.addIfAbsent(keyExchangeAlgorithms, KeyExchangeAlgorithm.EC_DIFFIE_HELLMAN);
 				}
 			}
 
 			if (psk) {
 				if (clientConfig.identity != null) {
-					dtlsConfig
-							.setAdvancedPskStore(new PlugPskStore(clientConfig.identity, clientConfig.getPskSecretKey()));
+					dtlsConfig.setPskStore(
+							new PlugPskStore(clientConfig.identity, clientConfig.getPskSecretKey()));
 				} else {
 					byte[] rid = new byte[8];
 					SecureRandom random = new SecureRandom();
 					random.nextBytes(rid);
-					dtlsConfig.setAdvancedPskStore(new PlugPskStore(StringUtil.byteArray2Hex(rid)));
+					dtlsConfig.setPskStore(new PlugPskStore(StringUtil.byteArray2Hex(rid)));
 				}
 			}
 			if (clientConfig.cipherSuites != null && !clientConfig.cipherSuites.isEmpty()) {
@@ -436,7 +445,7 @@ public class ClientInitializer {
 		}
 
 		@Override
-		public Connector create(ClientBaseConfig clientConfig, ExecutorService executor) {
+		public Connector create(ClientBaseConfig clientConfig, ProtocolScheduledExecutorService executor) {
 			Builder dtlsConfig = createDtlsConfig(clientConfig);
 			DTLSConnector dtlsConnector = new DTLSConnector(dtlsConfig.build());
 			if (executor != null) {
@@ -446,7 +455,7 @@ public class ClientInitializer {
 		}
 	}
 
-	public static class PlugPskStore implements AdvancedPskStore {
+	public static class PlugPskStore implements PskStore {
 
 		private final PskPublicInformation identity;
 		private final SecretKey secret;
@@ -454,7 +463,7 @@ public class ClientInitializer {
 		public PlugPskStore(String id, byte[] secret) {
 			this.identity = new PskPublicInformation(id);
 			this.secret = secret == null ? ConnectorConfig.PSK_SECRET
-					: SecretUtil.create(secret, PskSecretResult.ALGORITHM_PSK);
+					: SecretUtil.create(secret, "PSK");
 			LOGGER.trace("DTLS-PSK-Identity: {}", identity);
 		}
 
@@ -484,12 +493,12 @@ public class ClientInitializer {
 			if (this.identity.equals(identity)) {
 				if (this.secret == null
 						&& identity.getPublicInfoAsString().startsWith(ConnectorConfig.PSK_IDENTITY_PREFIX)) {
-					secret = SecretUtil.create(ConnectorConfig.PSK_SECRET);
+					secret = ConnectorConfig.PSK_SECRET;
 				} else {
-					secret = SecretUtil.create(this.secret);
+					secret = this.secret;
 				}
 			}
-			return new PskSecretResult(cid, this.identity, secret);
+			return new PskSecretResult(cid, this.identity, secret, false, false);
 		}
 
 		@Override

@@ -24,6 +24,7 @@ import java.io.OutputStreamWriter;
 import java.io.Reader;
 import java.io.Writer;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -38,7 +39,6 @@ import javax.security.auth.Destroyable;
 
 import org.eclipse.californium.elements.util.Bytes;
 import org.eclipse.californium.elements.util.EncryptedStreamUtil;
-import org.eclipse.californium.elements.util.StandardCharsets;
 import org.eclipse.californium.elements.util.StringUtil;
 import org.eclipse.californium.elements.util.SystemResourceMonitors.SystemResourceCheckReady;
 import org.eclipse.californium.elements.util.SystemResourceMonitors.SystemResourceMonitor;
@@ -53,7 +53,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * File based {@link AdvancedPskStore} implementation supporting multiple peers.
+ * File based {@link PskStore} implementation supporting multiple peers.
  * 
  * Lines in format:
  * 
@@ -81,7 +81,7 @@ import org.slf4j.LoggerFactory;
  * 
  * @since 3.7
  */
-public class MultiPskFileStore implements AdvancedPskStore, Destroyable {
+public class MultiPskFileStore implements PskStore, Destroyable {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(MultiPskFileStore.class);
 
@@ -182,7 +182,7 @@ public class MultiPskFileStore implements AdvancedPskStore, Destroyable {
 			} finally {
 				lock.readLock().unlock();
 			}
-			return SecretUtil.create(key);
+			return key;
 		}
 
 		/**
@@ -427,18 +427,6 @@ public class MultiPskFileStore implements AdvancedPskStore, Destroyable {
 	 */
 	public String getReadCipher() {
 		return encryptionUtility.getReadCipher();
-	}
-
-	/**
-	 * Set algorithm and key size.
-	 * 
-	 * @param cipherAlgorithm cipher algorithm
-	 * @param keySizeBits key size in bits
-	 * @deprecated use {@link #setWriteCipher(String, int)} instead
-	 */
-	@Deprecated
-	public void setCipher(String cipherAlgorithm, int keySizeBits) {
-		encryptionUtility.setCipher(cipherAlgorithm, keySizeBits);
 	}
 
 	/**
@@ -850,7 +838,7 @@ public class MultiPskFileStore implements AdvancedPskStore, Destroyable {
 	public PskSecretResult requestPskSecretResult(ConnectionId cid, ServerNames serverName,
 			PskPublicInformation identity, String hmacAlgorithm, SecretKey otherSecret, byte[] seed,
 			boolean useExtendedMasterSecret) {
-		return new PskSecretResult(cid, identity, credentials.getSecret(identity));
+		return new PskSecretResult(cid, identity, credentials.getSecret(identity), false, false);
 	}
 
 	@Override

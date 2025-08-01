@@ -18,6 +18,12 @@
 	vertical-align: middle;
 }
 
+#logosvg {
+	height: 40px;
+	width: 40px;
+	padding-right: 0.3em;
+}
+
 #title {
 	display: inline-block;
 	vertical-align: middle;
@@ -91,11 +97,19 @@
 }
 
 #devicelist tr.changed {
-	background-color: lightyellow;
+	background-color: LightYellow;
 }
 
 #devicelist tr.new {
 	background-color: yellow;
+}
+
+#devicelist tr.warn {
+	background-color: LightSalmon;
+}
+
+#devicelist tr.miss {
+	background-color: red;
 }
 
 #devicelist tr.changed button.tb1 {

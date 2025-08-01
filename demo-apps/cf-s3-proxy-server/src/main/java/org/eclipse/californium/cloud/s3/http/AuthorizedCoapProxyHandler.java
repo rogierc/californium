@@ -18,7 +18,7 @@ import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URLDecoder;
-import java.security.MessageDigest;
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -29,16 +29,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
 
+import org.eclipse.californium.cloud.http.EtagGenerator;
 import org.eclipse.californium.cloud.http.HttpService;
 import org.eclipse.californium.cloud.http.HttpService.CoapProxyHandler;
 import org.eclipse.californium.cloud.s3.http.Aws4Authorizer.Authorization;
+import org.eclipse.californium.cloud.s3.http.Aws4Authorizer.WebAppAuthorization;
 import org.eclipse.californium.cloud.s3.util.WebAppConfigProvider;
 import org.eclipse.californium.core.CoapServer;
 import org.eclipse.californium.core.coap.LinkFormat;
 import org.eclipse.californium.core.server.resources.Resource;
-import org.eclipse.californium.elements.util.StandardCharsets;
-import org.eclipse.californium.elements.util.StringUtil;
-import org.eclipse.californium.scandium.dtls.cipher.ThreadLocalMessageDigest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -57,14 +56,6 @@ public class AuthorizedCoapProxyHandler extends CoapProxyHandler {
 	 * Ban topic to report authorization failures.
 	 */
 	private static final String BAN = "HTTPS";
-	/**
-	 * Hash algorithm for ETAG.
-	 */
-	private static final String ETAG_ALGORITHM = "MD5";
-	/**
-	 * Thread local message digest for ETAG.
-	 */
-	private static final ThreadLocalMessageDigest ETAG = new ThreadLocalMessageDigest(ETAG_ALGORITHM);
 
 	/**
 	 * AWS4-HMAC-SHA256 authorizer.
@@ -93,8 +84,8 @@ public class AuthorizedCoapProxyHandler extends CoapProxyHandler {
 
 	/**
 	 * Create proxy handler.
-	 * 
-	 * Note: requires web application configuration {@code config.diagnose}!
+	 * <p>
+	 * <b>Note:</b> requires web application configuration {@code config.diagnose}!
 	 * 
 	 * @param bucket bucket name for proxy. Used for list.
 	 * @param authorizer AWS4-HMAC-SHA256 authorizer to check for valid
@@ -139,16 +130,17 @@ public class AuthorizedCoapProxyHandler extends CoapProxyHandler {
 		boolean permission = false;
 
 		Authorization authorization = authorizer.checkSignature(httpExchange, BAN);
-		if (authorization != null && authorization.isVerified() && authorization.isInTime()) {
-			String value = webAppConfigs.get(authorization.getDomain(),
-					authorization.getWebAppUser().webAppConfig + ".config", "diagnose");
-			permission = value != null && !value.equalsIgnoreCase("false") && !value.equals("0");
+		if (authorization instanceof WebAppAuthorization && authorization.isInTime()) {
+			WebAppAuthorization web = (WebAppAuthorization) authorization;
+			permission = webAppConfigs.isEnabled(web.getDomain(),
+					web.getWebAppUser().webAppConfig + WebAppConfigProvider.CONFIGURATION_PREFIX,
+					WebAppConfigProvider.DIAGNOSE_NAME);
 		}
 		if (permission) {
 			final String method = httpExchange.getRequestMethod();
 			final URI uri = httpExchange.getRequestURI();
 			LOGGER.info("http-proxy-request: {} {}", method, uri);
-
+			httpExchange.setAttribute(HttpService.ATTRIBUTE_PRINCIPAL, authorization);
 			if (method.equals("GET") || method.equals("HEAD")) {
 				URI requestURI = httpExchange.getRequestURI();
 				String path = requestURI.getPath();
@@ -174,7 +166,7 @@ public class AuthorizedCoapProxyHandler extends CoapProxyHandler {
 			super.handle(httpExchange);
 		} else {
 			if (httpExchange.getResponseCode() == -1) {
-				authorizer.respondUnauthorized(httpExchange);
+				HttpService.respond(httpExchange, 401, null, null);
 			}
 			if (!authorizer.updateBan(httpExchange)) {
 				HttpService.ban(httpExchange, BAN);
@@ -187,8 +179,11 @@ public class AuthorizedCoapProxyHandler extends CoapProxyHandler {
 			throws IOException {
 		String dateTime = DateTimeFormatter.RFC_1123_DATE_TIME.format(OffsetDateTime.now(ZoneId.of("GMT")));
 		httpExchange.getResponseHeaders().set("last-modified", dateTime);
-		setEtag(httpExchange, payload);
-		HttpService.respond(httpExchange, httpCode, contentType, payload);
+		if (EtagGenerator.setEtag(httpExchange, payload)) {
+			HttpService.respond(httpExchange, 304, contentType, null);
+		} else {
+			HttpService.respond(httpExchange, httpCode, contentType, payload);
+		}
 	}
 
 	@Override
@@ -361,18 +356,5 @@ public class AuthorizedCoapProxyHandler extends CoapProxyHandler {
 			return 0;
 		}
 		return Integer.valueOf(value);
-	}
-
-	/**
-	 * Set ETAG for http response.
-	 * 
-	 * @param exchange http exchange.
-	 * @param payload payload to calculate ETAG.
-	 */
-	public static void setEtag(HttpExchange exchange, byte[] payload) {
-		MessageDigest md = ETAG.current();
-		md.reset();
-		byte[] etag = md.digest(payload);
-		exchange.getResponseHeaders().set("ETag", StringUtil.byteArray2Hex(etag).toLowerCase());
 	}
 }

@@ -20,9 +20,7 @@ package org.eclipse.californium.extplugtests.resources;
 
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.BAD_OPTION;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.CONTENT;
-import static org.eclipse.californium.core.coap.CoAP.ResponseCode.NOT_ACCEPTABLE;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.TEXT_PLAIN;
-import static org.eclipse.californium.core.coap.MediaTypeRegistry.UNDEFINED;
 
 import java.util.Arrays;
 import java.util.List;
@@ -35,13 +33,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.coap.CoAP;
 import org.eclipse.californium.core.coap.MessageObserverAdapter;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.coap.UriQueryParameter;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.elements.util.FilteredLogger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -170,7 +168,7 @@ public class Feed extends CoapResource {
 		setObservable(true);
 		setObserveType(type);
 		getAttributes().setTitle("Feed - " + type);
-		getAttributes().addContentType(TEXT_PLAIN);
+		addSupportedContentFormats(TEXT_PLAIN);
 	}
 
 	@Override
@@ -180,12 +178,6 @@ public class Feed extends CoapResource {
 		}
 		// get request to read out details
 		Request request = exchange.advanced().getRequest();
-
-		int accept = request.getOptions().getAccept();
-		if (accept != UNDEFINED && accept != TEXT_PLAIN) {
-			exchange.respond(NOT_ACCEPTABLE);
-			return;
-		}
 
 		boolean ack = false;
 		int length = 0;

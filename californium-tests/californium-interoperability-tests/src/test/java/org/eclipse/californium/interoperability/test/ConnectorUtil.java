@@ -42,10 +42,10 @@ import org.eclipse.californium.scandium.dtls.AlertMessage.AlertLevel;
 import org.eclipse.californium.scandium.dtls.CertificateType;
 import org.eclipse.californium.scandium.dtls.SingleNodeConnectionIdGenerator;
 import org.eclipse.californium.scandium.dtls.cipher.CipherSuite;
-import org.eclipse.californium.scandium.dtls.pskstore.AdvancedSinglePskStore;
+import org.eclipse.californium.scandium.dtls.pskstore.SinglePskStore;
 import org.eclipse.californium.scandium.dtls.x509.SingleCertificateProvider;
-import org.eclipse.californium.scandium.dtls.x509.StaticNewAdvancedCertificateVerifier;
-import org.eclipse.californium.scandium.dtls.x509.StaticNewAdvancedCertificateVerifier.Builder;
+import org.eclipse.californium.scandium.dtls.x509.StaticCertificateVerifier;
+import org.eclipse.californium.scandium.dtls.x509.StaticCertificateVerifier.Builder;
 
 /**
  * Connector utility.
@@ -206,8 +206,8 @@ public class ConnectorUtil {
 				.setAddress(bind)
 				.setConnectionIdGenerator(new SingleNodeConnectionIdGenerator(6));
 		if (CipherSuite.containsPskBasedCipherSuite(suites)) {
-			dtlsBuilder.setAdvancedPskStore(
-					new AdvancedSinglePskStore(CredentialslUtil.OPENSSL_PSK_IDENTITY, CredentialslUtil.OPENSSL_PSK_SECRET));
+			dtlsBuilder.setPskStore(
+					new SinglePskStore(CredentialslUtil.OPENSSL_PSK_IDENTITY, CredentialslUtil.OPENSSL_PSK_SECRET));
 		}
 		if (CipherSuite.containsCipherSuiteRequiringCertExchange(suites)) {
 			if (nextAnonymous) {
@@ -227,8 +227,8 @@ public class ConnectorUtil {
 				}
 				dtlsBuilder.setCertificateIdentityProvider(provider);
 			}
-			if (dtlsBuilder.getIncompleteConfig().getAdvancedCertificateVerifier() == null) {
-				Builder builder = StaticNewAdvancedCertificateVerifier.builder();
+			if (dtlsBuilder.getIncompleteConfig().getCertificateVerifier() == null) {
+				Builder builder = StaticCertificateVerifier.builder();
 				if (TRUST_CA.equals(trust)) {
 					builder.setTrustedCertificates(trustCa);
 				} else if (TRUST_ROOT.equals(trust)) {
@@ -237,7 +237,7 @@ public class ConnectorUtil {
 					builder.setTrustAllCertificates();
 				}
 				builder.setTrustAllRPKs();
-				dtlsBuilder.setAdvancedCertificateVerifier(builder.build());
+				dtlsBuilder.setCertificateVerifier(builder.build());
 			}
 		}
 		dtlsBuilder.set(DtlsConfig.DTLS_CIPHER_SUITES, suites);

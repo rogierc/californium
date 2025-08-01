@@ -18,23 +18,27 @@ import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
-import org.apache.hc.client5.http.auth.AuthScope;
+import org.apache.hc.client5.http.ContextBuilder;
+import org.apache.hc.client5.http.auth.CredentialsProvider;
 import org.apache.hc.client5.http.auth.UsernamePasswordCredentials;
 import org.apache.hc.client5.http.impl.async.CloseableHttpAsyncClient;
-import org.apache.hc.client5.http.impl.auth.BasicCredentialsProvider;
+import org.apache.hc.client5.http.impl.auth.CredentialsProviderBuilder;
 import org.apache.hc.client5.http.protocol.HttpClientContext;
 import org.apache.hc.core5.concurrent.FutureCallback;
 import org.apache.hc.core5.http.Header;
+import org.apache.hc.core5.http.HttpHost;
 import org.apache.hc.core5.http.HttpResponse;
 import org.apache.hc.core5.http.Message;
+import org.apache.hc.core5.http.ProtocolException;
+import org.apache.hc.core5.http.message.BasicHeader;
 import org.apache.hc.core5.http.message.StatusLine;
 import org.apache.hc.core5.http.nio.support.BasicResponseConsumer;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
-import org.eclipse.californium.core.coap.ResponseConsumer;
 import org.eclipse.californium.elements.util.ClockUtil;
 import org.eclipse.californium.proxy2.Coap2CoapTranslator;
 import org.eclipse.californium.proxy2.InvalidFieldException;
@@ -52,6 +56,10 @@ import com.google.common.net.HttpHeaders;
 public class Coap2HttpProxy {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(Coap2HttpProxy.class);
+
+	private static final String AUTH_BEARER = "Bearer ";
+	private static final String AUTH_PREEMPTIVE_BASIC = "PreBasic ";
+	private static final String AUTH_HEADER = "Header ";
 
 	/**
 	 * DefaultHttpClient is thread safe. It is recommended that the same
@@ -77,7 +85,73 @@ public class Coap2HttpProxy {
 	}
 
 	/**
+	 * Parses credentials from authentication.
+	 * 
+	 * @param authentication authentication as string. Expects
+	 *            {@code <username>:<password>}
+	 * @param offset offset to parse the credentials.
+	 * @return UsernamePasswordCredentials on success, {@code null}, if parsing
+	 *         the credentials fails.
+	 * @since 4.0
+	 */
+	private UsernamePasswordCredentials parseCredentials(String authentication, int offset) {
+		int index = authentication.indexOf(':', offset);
+		if (index > 0) {
+			char[] pw = authentication.toCharArray();
+			pw = Arrays.copyOfRange(pw, index + 1, pw.length);
+
+			return new UsernamePasswordCredentials(authentication.substring(offset, index).trim(), pw);
+		}
+		return null;
+	}
+
+	/**
+	 * Parses http-header from authentication.
+	 * 
+	 * @param authentication authentication as string. Expects
+	 *            {@code <name>:<value>}
+	 * @param offset offset to parse the credentials.
+	 * @return Header on success, {@code null}, if parsing fails.
+	 * @since 4.0
+	 */
+	private Header parseHeader(String authentication, int offset) {
+		int index = authentication.indexOf(':', offset);
+		if (index > 0) {
+			String name = authentication.substring(offset, index).trim();
+			String value = authentication.substring(index + 1);
+			return new BasicHeader(name, value);
+		}
+		return null;
+	}
+
+	/**
+	 * Create target host from destination URI.
+	 * 
+	 * @param destination destination URI
+	 * @return target host
+	 * @since 4.0
+	 */
+	private HttpHost getTargetHost(URI destination) {
+		return new HttpHost(destination.getScheme(), destination.getHost(), destination.getPort());
+	}
+
+	/**
 	 * Handle http-forward request.
+	 * 
+	 * Several authentication options are supported.
+	 * 
+	 * <dl>
+	 * <dt>Bearer {@code <access-token>}</dt>
+	 * <dd>adds the {@code <access-token>} preemptive to the request's
+	 * headers</dd>
+	 * <dt>PreBasic {@code <username:password>}</dt>
+	 * <dd>Uses BASIC authentication preemptive</dd>
+	 * <dt>Header {@code <name:value>}</dt>
+	 * <dd>Uses a header with name-value pair</dd>
+	 * <dt>{@code <username:password>}</dt>
+	 * <dd>Prepares to respond to a {@code WWW-Authenticate} challenge from the
+	 * server.</dd>
+	 * </dl>
 	 * 
 	 * @param destination http destination
 	 * @param authentication http authentication. Maybe {@code null}.
@@ -85,32 +159,38 @@ public class Coap2HttpProxy {
 	 * @param onResponse callback for coap-response
 	 */
 	public void handleForward(URI destination, String authentication, final Request incomingCoapRequest,
-			final ResponseConsumer onResponse) {
+			final Consumer<Response> onResponse) {
 
 		HttpClientContext context = null;
+		Header extra = null;
 
 		if (authentication != null) {
-			if (authentication.startsWith("Bearer ")) {
-				// pass to translator
-			} else {
-				int index = authentication.indexOf(':');
-				if (index > 0) {
-					BasicCredentialsProvider provider = new BasicCredentialsProvider();
-					char[] pw = authentication.toCharArray();
-					pw = Arrays.copyOfRange(pw, index + 1, pw.length);
-					provider.setCredentials(new AuthScope(null, -1),
-							new UsernamePasswordCredentials(authentication.substring(0, index), pw));
-					context = HttpClientContext.create();
-					context.setCredentialsProvider(provider);
+			if (authentication.regionMatches(true, 0, AUTH_BEARER, 0, AUTH_BEARER.length())) {
+				extra = new BasicHeader(HttpHeaders.AUTHORIZATION, authentication);
+			} else if (authentication.regionMatches(true, 0, AUTH_PREEMPTIVE_BASIC, 0,
+					AUTH_PREEMPTIVE_BASIC.length())) {
+				UsernamePasswordCredentials credentials = parseCredentials(authentication,
+						AUTH_PREEMPTIVE_BASIC.length());
+				if (credentials != null) {
+					context = ContextBuilder.create().preemptiveBasicAuth(getTargetHost(destination), credentials)
+							.build();
 				}
-				authentication = null;
+			} else if (authentication.regionMatches(true, 0, AUTH_HEADER, 0, AUTH_HEADER.length())) {
+				extra = parseHeader(authentication, AUTH_HEADER.length());
+			} else {
+				UsernamePasswordCredentials credentials = parseCredentials(authentication, 0);
+				if (credentials != null) {
+					CredentialsProvider credentialsProvider = CredentialsProviderBuilder.create()
+							.add(getTargetHost(destination), credentials).build();
+					context = ContextBuilder.create().useCredentialsProvider(credentialsProvider).build();
+				}
 			}
 		}
 
 		ProxyRequestProducer httpRequest = null;
 		try {
 			// get the mapping to http for the outgoing coap request
-			httpRequest = translator.getHttpRequest(destination, authentication, incomingCoapRequest);
+			httpRequest = translator.getHttpRequest(destination, incomingCoapRequest, extra);
 			LOGGER.debug("Outgoing http request: {}", httpRequest.getRequestLine());
 			if (LOGGER.isDebugEnabled()) {
 				String ct = httpRequest.getContentType();
@@ -131,11 +211,11 @@ public class Coap2HttpProxy {
 			}
 		} catch (InvalidFieldException e) {
 			LOGGER.debug("Problems during the http/coap translation: {}", e.getMessage());
-			onResponse.respond(new Response(Coap2CoapTranslator.STATUS_FIELD_MALFORMED));
+			onResponse.accept(new Response(Coap2CoapTranslator.STATUS_FIELD_MALFORMED));
 			return;
 		} catch (TranslationException e) {
 			LOGGER.debug("Problems during the http/coap translation: {}", e.getMessage());
-			onResponse.respond(new Response(Coap2CoapTranslator.STATUS_TRANSLATION_ERROR));
+			onResponse.accept(new Response(Coap2CoapTranslator.STATUS_TRANSLATION_ERROR));
 			return;
 		}
 
@@ -155,30 +235,34 @@ public class Coap2HttpProxy {
 								for (Header header : result.getHead().getHeaders()) {
 									LOGGER.debug("   {}", header);
 								}
+								if (status.isError()) {
+									byte[] content = result.getBody().getContent();
+									LOGGER.debug("   {}", new String(content));
+								}
 							}
 							// translate the received http response
 							// in a coap response
 							Response coapResponse = translator.getCoapResponse(result, incomingCoapRequest);
 							coapResponse.setNanoTimestamp(timestamp);
-							onResponse.respond(coapResponse);
+							onResponse.accept(coapResponse);
 						} catch (InvalidFieldException e) {
 							LOGGER.debug("Problems during the http/coap translation: {}", e.getMessage());
 							Response response = new Response(Coap2CoapTranslator.STATUS_FIELD_MALFORMED);
 							response.setPayload(e.getMessage());
 							response.getOptions().setContentFormat(MediaTypeRegistry.TEXT_PLAIN);
-							onResponse.respond(response);
+							onResponse.accept(response);
 						} catch (TranslationException e) {
 							LOGGER.debug("Problems during the http/coap translation: {}", e.getMessage());
 							Response response = new Response(Coap2CoapTranslator.STATUS_TRANSLATION_ERROR);
 							response.setPayload(e.getMessage());
 							response.getOptions().setContentFormat(MediaTypeRegistry.TEXT_PLAIN);
-							onResponse.respond(response);
+							onResponse.accept(response);
 						} catch (Throwable e) {
 							LOGGER.debug("Error during the http/coap translation: {}", e.getMessage(), e);
 							Response response = new Response(Coap2CoapTranslator.STATUS_FIELD_MALFORMED);
 							response.setPayload(e.getMessage());
 							response.getOptions().setContentFormat(MediaTypeRegistry.TEXT_PLAIN);
-							onResponse.respond(response);
+							onResponse.accept(response);
 						}
 						LOGGER.debug("Incoming http response: {} processed ({}ms)!", status,
 								TimeUnit.NANOSECONDS.toMillis(timestamp - now));
@@ -188,19 +272,24 @@ public class Coap2HttpProxy {
 					public void failed(Exception ex) {
 						LOGGER.debug("Failed to get the http response: {}", ex.getMessage(), ex);
 						if (ex instanceof SocketTimeoutException) {
-							onResponse.respond(new Response(ResponseCode.GATEWAY_TIMEOUT));
-						} else {
-							Response response = new Response(ResponseCode.BAD_GATEWAY);
-							response.setPayload(ex.getMessage());
-							response.getOptions().setContentFormat(MediaTypeRegistry.TEXT_PLAIN);
-							onResponse.respond(response);
+							onResponse.accept(new Response(ResponseCode.GATEWAY_TIMEOUT));
+							return;
 						}
+						Response response;
+						if (ex instanceof ProtocolException) {
+							response = new Response(ResponseCode.BAD_REQUEST);
+						} else {
+							response = new Response(ResponseCode.BAD_GATEWAY);
+						}
+						response.setPayload(ex.getMessage());
+						response.getOptions().setContentFormat(MediaTypeRegistry.TEXT_PLAIN);
+						onResponse.accept(response);
 					}
 
 					@Override
 					public void cancelled() {
 						LOGGER.debug("Request canceled");
-						onResponse.respond(new Response(ResponseCode.SERVICE_UNAVAILABLE));
+						onResponse.accept(new Response(ResponseCode.SERVICE_UNAVAILABLE));
 					}
 				});
 

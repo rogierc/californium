@@ -25,6 +25,7 @@ import java.net.SocketException;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.coap.CoAP;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
@@ -32,7 +33,6 @@ import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.config.CoapConfig;
 import org.eclipse.californium.core.network.Exchange;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.core.server.resources.MyIpResource;
 import org.eclipse.californium.core.server.resources.Resource;
 import org.eclipse.californium.elements.config.Configuration;
@@ -70,18 +70,14 @@ public class SimpleFileServer extends AbstractTestServer {
 		TcpConfig.register();
 	}
 
-	private static DefinitionsProvider DEFAULTS = new DefinitionsProvider() {
-
-		@Override
-		public void applyDefinitions(Configuration config) {
-			config.set(CoapConfig.MAX_RESOURCE_BODY_SIZE, DEFAULT_MAX_RESOURCE_SIZE);
-			config.set(CoapConfig.MAX_MESSAGE_SIZE, DEFAULT_BLOCK_SIZE);
-			config.set(CoapConfig.PREFERRED_BLOCK_SIZE, DEFAULT_BLOCK_SIZE);
-			config.setTransient(DtlsConfig.DTLS_CLIENT_AUTHENTICATION_MODE);
-			config.setTransient(TcpConfig.TLS_CLIENT_AUTHENTICATION_MODE);
-			config.set(EXTERNAL_UDP_MAX_MESSAGE_SIZE, 64);
-			config.set(EXTERNAL_UDP_PREFERRED_BLOCK_SIZE, 64);
-		}
+	private static DefinitionsProvider DEFAULTS = (config) -> {
+		config.set(CoapConfig.MAX_RESOURCE_BODY_SIZE, DEFAULT_MAX_RESOURCE_SIZE);
+		config.set(CoapConfig.MAX_MESSAGE_SIZE, DEFAULT_BLOCK_SIZE);
+		config.set(CoapConfig.PREFERRED_BLOCK_SIZE, DEFAULT_BLOCK_SIZE);
+		config.setTransient(DtlsConfig.DTLS_CLIENT_AUTHENTICATION_MODE);
+		config.setTransient(TcpConfig.TLS_CLIENT_AUTHENTICATION_MODE);
+		config.set(EXTERNAL_UDP_MAX_MESSAGE_SIZE, 64);
+		config.set(EXTERNAL_UDP_PREFERRED_BLOCK_SIZE, 64);
 	};
 
 	private static final String DEFAULT_PATH = "data";
@@ -206,6 +202,7 @@ public class SimpleFileServer extends AbstractTestServer {
 		 */
 		public FileResource(Configuration config, String coapRootPath, File filesRoot) {
 			super(coapRootPath);
+			addSupportedContentFormats(MediaTypeRegistry.APPLICATION_OCTET_STREAM);
 			this.config = config;
 			this.filesRoot = filesRoot;
 		}
@@ -233,14 +230,6 @@ public class SimpleFileServer extends AbstractTestServer {
 		public void handleGET(final CoapExchange exchange) {
 			Request request = exchange.advanced().getRequest();
 			LOG.info("Get received : {}", request);
-
-			int accept = request.getOptions().getAccept();
-			if (MediaTypeRegistry.UNDEFINED == accept) {
-				accept = MediaTypeRegistry.APPLICATION_OCTET_STREAM;
-			} else if (MediaTypeRegistry.APPLICATION_OCTET_STREAM != accept) {
-				exchange.respond(CoAP.ResponseCode.UNSUPPORTED_CONTENT_FORMAT);
-				return;
-			}
 
 			String myURI = getURI() + "/";
 			String path = "/" + request.getOptions().getUriPathString();
@@ -286,7 +275,7 @@ public class SimpleFileServer extends AbstractTestServer {
 					Response response = new Response(CoAP.ResponseCode.CONTENT);
 					response.setPayload(content);
 					response.getOptions().setSize2((int) length);
-					response.getOptions().setContentFormat(accept);
+					response.getOptions().setContentFormat(MediaTypeRegistry.APPLICATION_OCTET_STREAM);
 					exchange.respond(response);
 				} else {
 					LOG.warn("File {} could not be read in!", file.getAbsolutePath());

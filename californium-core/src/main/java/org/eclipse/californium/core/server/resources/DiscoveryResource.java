@@ -25,6 +25,7 @@ package org.eclipse.californium.core.server.resources;
 import java.util.List;
 import java.util.Set;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.WebLink;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
@@ -35,7 +36,7 @@ import org.eclipse.californium.core.coap.MediaTypeRegistry;
  * The DiscoveryResource implements CoAP's discovery service.
  * 
  * It is typically accessible over CoAP on the well-known URI:
- * <tt>/.well-known/core</tt>. It responds to GET requests with a list of the
+ * {@code /.well-known/core}. It responds to GET requests with a list of the
  * server's resources, i.e. links.
  * 
  * Since 3.1, this resource and its children are not longer contained in the
@@ -67,6 +68,7 @@ public class DiscoveryResource extends CoapResource {
 	public DiscoveryResource(String name, Resource root) {
 		super(name);
 		setVisible(false);
+		addSupportedContentFormats(MediaTypeRegistry.APPLICATION_LINK_FORMAT);
 		this.root = root;
 	}
 
@@ -77,12 +79,7 @@ public class DiscoveryResource extends CoapResource {
 	 */
 	@Override
 	public void handleGET(CoapExchange exchange) {
-		if (exchange.getRequestOptions().hasAccept()
-				&& exchange.getRequestOptions().getAccept() != MediaTypeRegistry.APPLICATION_LINK_FORMAT) {
-			exchange.respond(ResponseCode.NOT_ACCEPTABLE);
-			return;
-		}
-		List<String> query = exchange.getRequestOptions().getUriQuery();
+		List<String> query = exchange.getRequestOptions().getUriQueryStrings();
 		if (query.size() > 1) {
 			exchange.respond(ResponseCode.BAD_OPTION, "only one search query is supported!",
 					MediaTypeRegistry.TEXT_PLAIN);

@@ -14,8 +14,6 @@
  ********************************************************************************/
 package org.eclipse.californium.cloud.util;
 
-import org.eclipse.californium.cloud.util.DeviceManager.DeviceInfo;
-
 /**
  * Device provisioning consumer.
  * 
@@ -26,10 +24,10 @@ public interface DeviceProvisioningConsumer {
 	/**
 	 * Add data to device store.
 	 * 
-	 * @param info device info of provisioning.
+	 * @param info principal info of provisioning.
 	 * @param time timestamp of request.
 	 * @param data data to add.
 	 * @param response response consumer.
 	 */
-	void add(DeviceInfo info, long time, String data, ResultConsumer response);
+	void add(PrincipalInfo info, long time, String data, ResultConsumer response);
 }

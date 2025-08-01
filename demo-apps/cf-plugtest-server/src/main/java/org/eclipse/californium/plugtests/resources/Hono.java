@@ -22,9 +22,9 @@ import static org.eclipse.californium.core.coap.MediaTypeRegistry.TEXT_PLAIN;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.APPLICATION_OCTET_STREAM;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.UNDEFINED;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 
 /**
  * This resource implements a simple test for hono clients.
@@ -36,9 +36,7 @@ public class Hono extends CoapResource {
 	public Hono(String name) {
 		super(name, false);
 		getAttributes().setTitle("Hono test request for " + name);
-		getAttributes().addContentType(APPLICATION_JSON);
-		getAttributes().addContentType(TEXT_PLAIN);
-		getAttributes().addContentType(APPLICATION_OCTET_STREAM);
+		addSupportedContentFormats(APPLICATION_JSON, TEXT_PLAIN, APPLICATION_OCTET_STREAM);
 	}
 
 	@Override

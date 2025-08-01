@@ -23,6 +23,7 @@ import static org.eclipse.californium.core.coap.MediaTypeRegistry.TEXT_PLAIN;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.UNDEFINED;
 
 import java.net.InetSocketAddress;
+import java.security.Principal;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -32,24 +33,24 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 
-import org.eclipse.californium.core.CoapResource;
+import org.eclipse.californium.cloud.EndpointNetSocketObserver;
+import org.eclipse.californium.cloud.util.PrincipalInfo.Type;
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.WebLink;
 import org.eclipse.californium.core.coap.CoAP;
+import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.coap.LinkFormat;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
 import org.eclipse.californium.core.coap.Response;
-import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.network.Endpoint;
 import org.eclipse.californium.core.network.interceptors.MessageInterceptor;
 import org.eclipse.californium.core.server.ServerInterface;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.core.server.resources.Resource;
 import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.util.ClockUtil;
 import org.eclipse.californium.elements.util.CounterStatisticManager;
 import org.eclipse.californium.elements.util.SimpleCounterStatistic;
 import org.eclipse.californium.elements.util.StringUtil;
-import org.eclipse.californium.cloud.EndpointNetSocketObserver;
 import org.eclipse.californium.scandium.config.DtlsConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,14 +65,15 @@ import com.upokecenter.cbor.CBORObject;
  * 
  * @since 3.12
  */
-public class Diagnose extends CoapResource {
+public class Diagnose extends ProtectedCoapResource {
 
 	public static final String RESOURCE_NAME = "diagnose";
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(Diagnose.class);
-	private static final SimpleDateFormat ISO = new SimpleDateFormat("yyyy-MM-dd'T'hh:mm:ss.SSSXXX");
+	private static final SimpleDateFormat ISO = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
 
 	private static final String START_TIME = ISO.format(new Date());
+	private static final boolean FILTER_EMPTY_STATISTICS = true;
 
 	private final List<ServerInterface> serverList = new ArrayList<>();
 	private final ConcurrentMap<InetSocketAddress, List<CounterStatisticManager>> endpointsHealth;
@@ -83,7 +85,7 @@ public class Diagnose extends CoapResource {
 	}
 
 	public Diagnose(String name, String title, ServerInterface server) {
-		super(name);
+		super(name, Type.WEB);
 		init(title);
 		if (server != null) {
 			this.serverList.add(server);
@@ -94,7 +96,7 @@ public class Diagnose extends CoapResource {
 	}
 
 	public Diagnose(String name, String title, Endpoint endpoint, List<CounterStatisticManager> endpointHealth) {
-		super(name);
+		super(name, Type.DEVICE, Type.WEB);
 		init(title);
 		this.endpointsHealth = null;
 		this.endpointHealth = endpointHealth;
@@ -136,7 +138,7 @@ public class Diagnose extends CoapResource {
 		String key = protocol + ":" + StringUtil.toString(local);
 		CounterStatisticManager statistic = EndpointNetSocketObserver.getDtlsStatisticManager(endpoint);
 		if (statistic != null) {
-			health.add((CounterStatisticManager) statistic);
+			health.add(statistic);
 		}
 		for (MessageInterceptor interceptor : endpoint.getInterceptors()) {
 			if (interceptor instanceof CounterStatisticManager) {
@@ -172,7 +174,11 @@ public class Diagnose extends CoapResource {
 				Configuration config = endpoint.getConfig();
 				maxConnections = config.get(DtlsConfig.DTLS_MAX_CONNECTIONS);
 				nodeId = config.get(DtlsConfig.DTLS_CONNECTION_ID_NODE_ID);
-				LOGGER.info("coaps: max {}, node-id {}", maxConnections, nodeId);
+				if (nodeId != null) {
+					LOGGER.info("coaps: max {}, node-id {}", maxConnections, nodeId);
+				} else {
+					LOGGER.info("coaps: max {}", maxConnections);
+				}
 			} else {
 				LOGGER.info("{}", scheme);
 			}
@@ -180,7 +186,7 @@ public class Diagnose extends CoapResource {
 				healths = endpointsHealth.get(endpoint.getAddress());
 			}
 		} else if (healths == null) {
-			List<String> query = exchange.getRequestOptions().getUriQuery();
+			List<String> query = exchange.getRequestOptions().getUriQueryStrings();
 			if (query.size() > 1) {
 				exchange.respond(ResponseCode.BAD_OPTION, "only one search query is supported!",
 						MediaTypeRegistry.TEXT_PLAIN);
@@ -193,21 +199,22 @@ public class Diagnose extends CoapResource {
 			return;
 		}
 
+		Principal principal = getPrincipal(exchange);
 		switch (exchange.getRequestOptions().getAccept()) {
 		case UNDEFINED:
 		case TEXT_PLAIN:
 			response.getOptions().setContentFormat(TEXT_PLAIN);
-			response.setPayload(toText(maxConnections, nodeId, healths));
+			response.setPayload(toText(maxConnections, nodeId, healths, principal));
 			break;
 
 		case APPLICATION_JSON:
 			response.getOptions().setContentFormat(APPLICATION_JSON);
-			response.setPayload(toJson(maxConnections, nodeId, healths));
+			response.setPayload(toJson(maxConnections, nodeId, healths, principal));
 			break;
 
 		case APPLICATION_CBOR:
 			response.getOptions().setContentFormat(APPLICATION_CBOR);
-			response.setPayload(toCbor(maxConnections, nodeId, healths));
+			response.setPayload(toCbor(maxConnections, nodeId, healths, principal));
 			break;
 
 		default:
@@ -218,7 +225,8 @@ public class Diagnose extends CoapResource {
 		exchange.respond(response);
 	}
 
-	public String toText(Integer maxConnections, Integer nodeId, List<CounterStatisticManager> healths) {
+	public String toText(Integer maxConnections, Integer nodeId, List<CounterStatisticManager> healths,
+			Principal principal) {
 		String eol = System.lineSeparator();
 		StringBuilder builder = new StringBuilder();
 		builder.append("systemstart: ").append(START_TIME).append(eol);
@@ -234,7 +242,7 @@ public class Diagnose extends CoapResource {
 			builder.append("since: ").append(TimeUnit.NANOSECONDS.toSeconds(lastTransfer)).append("s").append(eol);
 			int counter = 0;
 			for (CounterStatisticManager manager : healths) {
-				boolean counts = false;
+				boolean counts = !FILTER_EMPTY_STATISTICS;
 				int mark = builder.length();
 				String tag = manager.getTag();
 				if (tag != null && !tag.isEmpty()) {
@@ -243,13 +251,13 @@ public class Diagnose extends CoapResource {
 					builder.append(++counter).append(eol);
 				}
 				String head = "   ";
-				for (String key : manager.getKeys()) {
+				for (String key : manager.getKeys(principal)) {
 					SimpleCounterStatistic statistic = manager.getByKey(key);
 					if (statistic != null) {
 						long[] pair = statistic.getCountersPair();
 						builder.append(head).append(key).append(",").append(pair[0]).append(",").append(pair[1])
 								.append(eol);
-						if (pair[1] > 0) {
+						if (pair[1] > 0 || pair[0] > 0) {
 							counts = true;
 						}
 					}
@@ -263,7 +271,8 @@ public class Diagnose extends CoapResource {
 		return builder.toString();
 	}
 
-	public String toJson(Integer maxConnections, Integer nodeId, List<CounterStatisticManager> healths) {
+	public String toJson(Integer maxConnections, Integer nodeId, List<CounterStatisticManager> healths,
+			Principal principal) {
 		JsonObject element = new JsonObject();
 		element.addProperty("systemstart", START_TIME);
 		if (nodeId != null) {
@@ -278,9 +287,9 @@ public class Diagnose extends CoapResource {
 			element.addProperty("since", TimeUnit.NANOSECONDS.toSeconds(lastTransfer) + "s");
 			int counter = 0;
 			for (CounterStatisticManager manager : healths) {
-				boolean counts = false;
+				boolean counts = !FILTER_EMPTY_STATISTICS;
 				JsonObject group = new JsonObject();
-				for (String key : manager.getKeys()) {
+				for (String key : manager.getKeys(principal)) {
 					SimpleCounterStatistic statistic = manager.getByKey(key);
 					if (statistic != null) {
 						long[] pair = statistic.getCountersPair();
@@ -308,7 +317,8 @@ public class Diagnose extends CoapResource {
 		return gson.toJson(element);
 	}
 
-	public byte[] toCbor(Integer maxConnections, Integer nodeId, List<CounterStatisticManager> healths) {
+	public byte[] toCbor(Integer maxConnections, Integer nodeId, List<CounterStatisticManager> healths,
+			Principal principal) {
 		CBORObject map = CBORObject.NewOrderedMap();
 		map.set("systemstart", CBORObject.FromObject(START_TIME));
 		if (nodeId != null) {
@@ -323,9 +333,9 @@ public class Diagnose extends CoapResource {
 			map.set("since", CBORObject.FromObject(TimeUnit.NANOSECONDS.toSeconds(lastTransfer) + "s"));
 			int counter = 0;
 			for (CounterStatisticManager manager : healths) {
-				boolean counts = false;
+				boolean counts = !FILTER_EMPTY_STATISTICS;
 				CBORObject group = CBORObject.NewOrderedMap();
-				for (String key : manager.getKeys()) {
+				for (String key : manager.getKeys(principal)) {
 					SimpleCounterStatistic statistic = manager.getByKey(key);
 					if (statistic != null) {
 						long[] pair = statistic.getCountersPair();

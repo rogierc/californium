@@ -32,9 +32,9 @@ import java.net.Socket;
 import java.net.URL;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
-import java.security.Principal;
 import java.security.KeyStore.Entry;
 import java.security.KeyStore.PrivateKeyEntry;
+import java.security.Principal;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Security;
@@ -144,11 +144,8 @@ public class SslContextUtil {
 
 	/**
 	 * The logger.
-	 * 
-	 * @deprecated scope will change to private.
 	 */
-	@Deprecated
-	public static final Logger LOGGER = LoggerFactory.getLogger(SslContextUtil.class);
+	private static final Logger LOGGER = LoggerFactory.getLogger(SslContextUtil.class);
 
 	/**
 	 * Scheme for key store URI. Used to load the key stores from classpath.
@@ -1368,13 +1365,6 @@ public class SslContextUtil {
 	public static class Credentials implements Destroyable {
 
 		/**
-		 * Indicates, that this instance has been {@link #destroy()}ed.
-		 * 
-		 * @since 3.12
-		 */
-		private volatile boolean destroyed;
-
-		/**
 		 * Private key.
 		 */
 		private final PrivateKey privateKey;
@@ -1472,12 +1462,34 @@ public class SslContextUtil {
 		}
 
 		/**
+		 * Check, if certificate trust chain is available.
+		 * 
+		 * @return {@code true}, if certificate trust chain is available,
+		 *         {@code false}, if not.
+		 * @since 4.0
+		 */
+		public boolean hasCertificateChain() {
+			return chain != null;
+		}
+
+		/**
 		 * Get trusted certificates.
 		 * 
 		 * @return trusted certificates. May be {@code null}, if not available.
 		 */
 		public Certificate[] getTrustedCertificates() {
 			return trusts;
+		}
+
+		/**
+		 * Check, if trusted certificates are available.
+		 * 
+		 * @return {@code true}, if trusted certificates are available,
+		 *         {@code false}, if not.
+		 * @since 4.0
+		 */
+		public boolean hasTrustedCertificates() {
+			return trusts != null;
 		}
 
 		/**
@@ -1533,10 +1545,9 @@ public class SslContextUtil {
 		 */
 		@Override
 		public void destroy() throws DestroyFailedException {
-			if (privateKey instanceof Destroyable) {
-				((Destroyable) privateKey).destroy();
+			if (privateKey != null) {
+				privateKey.destroy();
 			}
-			destroyed = true;
 		}
 
 		/**
@@ -1546,7 +1557,7 @@ public class SslContextUtil {
 		 */
 		@Override
 		public boolean isDestroyed() {
-			return destroyed || (privateKey == null && trusts == null && publicKey == null);
+			return privateKey == null || privateKey.isDestroyed();
 		}
 	}
 

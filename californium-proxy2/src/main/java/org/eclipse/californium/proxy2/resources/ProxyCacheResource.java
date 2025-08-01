@@ -29,12 +29,12 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
 import org.eclipse.californium.core.coap.OptionSet;
 import org.eclipse.californium.core.coap.Response;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.util.ClockUtil;
 import org.eclipse.californium.proxy2.config.Proxy2Config;
@@ -187,7 +187,7 @@ public class ProxyCacheResource extends CoapResource implements CacheResource {
 			if (all) {
 				URI uri = cacheKey.getUri();
 				if (response.getOptions().getLocationPathCount() > 0) {
-					String locationPath = response.getOptions().getLocationPathString();
+					String locationPath = response.getOptions().getLocationString();
 					uri = getResourceUri(uri, locationPath);
 				} else {
 					uri = getResourceUri(uri);

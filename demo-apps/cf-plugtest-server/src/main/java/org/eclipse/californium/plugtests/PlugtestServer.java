@@ -37,7 +37,6 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import javax.crypto.SecretKey;
@@ -45,7 +44,6 @@ import javax.crypto.SecretKey;
 import org.eclipse.californium.core.CoapServer;
 import org.eclipse.californium.core.coap.CoAP.Type;
 import org.eclipse.californium.core.config.CoapConfig;
-import org.eclipse.californium.core.server.EncryptedServersSerializationUtil;
 import org.eclipse.californium.core.server.resources.MyIpResource;
 import org.eclipse.californium.cose.AlgorithmID;
 import org.eclipse.californium.elements.config.CertificateAuthenticationMode;
@@ -57,10 +55,12 @@ import org.eclipse.californium.elements.config.TimeDefinition;
 import org.eclipse.californium.elements.config.UdpConfig;
 import org.eclipse.californium.elements.config.ValueException;
 import org.eclipse.californium.elements.util.Bytes;
+import org.eclipse.californium.elements.util.EncryptedPersistentComponentUtil;
 import org.eclipse.californium.elements.util.ExecutorsUtil;
 import org.eclipse.californium.elements.util.NamedThreadFactory;
 import org.eclipse.californium.elements.util.NetworkInterfacesUtil.InetAddressFilter;
 import org.eclipse.californium.elements.util.NetworkInterfacesUtil.SimpleInetAddressFilter;
+import org.eclipse.californium.elements.util.ProtocolScheduledExecutorService;
 import org.eclipse.californium.elements.util.StringUtil;
 import org.eclipse.californium.oscore.HashMapCtxDB;
 import org.eclipse.californium.oscore.OSCoreCoapStackFactory;
@@ -117,7 +117,6 @@ import picocli.CommandLine.ParseResult;
  * The class PlugtestServer implements the test specification for the ETSI IoT
  * CoAP Plugtests, London, UK, 7--9 Mar 2014.
  */
-@SuppressWarnings("deprecation")
 public class PlugtestServer extends AbstractTestServer {
 
 	/**
@@ -152,35 +151,31 @@ public class PlugtestServer extends AbstractTestServer {
 			CipherSuite.TLS_PSK_WITH_AES_128_GCM_SHA256, CipherSuite.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
 			CipherSuite.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, CipherSuite.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256);
 
-	private static DefinitionsProvider DEFAULTS = new DefinitionsProvider() {
-
-		@Override
-		public void applyDefinitions(Configuration config) {
-			config.set(SystemConfig.HEALTH_STATUS_INTERVAL, 300, TimeUnit.SECONDS);
-			config.set(CoapConfig.MAX_RESOURCE_BODY_SIZE, DEFAULT_MAX_RESOURCE_SIZE);
-			config.set(CoapConfig.MAX_MESSAGE_SIZE, DEFAULT_BLOCK_SIZE);
-			config.set(CoapConfig.PREFERRED_BLOCK_SIZE, DEFAULT_BLOCK_SIZE);
-			config.set(CoapConfig.NOTIFICATION_CHECK_INTERVAL_COUNT, 4);
-			config.set(CoapConfig.NOTIFICATION_CHECK_INTERVAL_TIME, 30, TimeUnit.SECONDS);
-			config.set(CoapConfig.TCP_NUMBER_OF_BULK_BLOCKS, 1);
-			config.set(CoapConfig.MAX_ACTIVE_PEERS, 10000);
-			config.set(DtlsConfig.DTLS_RECOMMENDED_CIPHER_SUITES_ONLY, false);
-			config.set(DtlsConfig.DTLS_AUTO_HANDSHAKE_TIMEOUT, null, TimeUnit.SECONDS);
-			config.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, 6);
-			config.set(DtlsConfig.DTLS_PRESELECTED_CIPHER_SUITES, PRESELECTED_CIPHER_SUITES);
-			config.set(DtlsConfig.DTLS_MAX_CONNECTIONS, 10000);
-			config.set(DtlsConfig.DTLS_REMOVE_STALE_DOUBLE_PRINCIPALS, false);
-			config.set(DtlsConfig.DTLS_MAC_ERROR_FILTER_QUIET_TIME, 4, TimeUnit.SECONDS);
-			config.set(DtlsConfig.DTLS_MAC_ERROR_FILTER_THRESHOLD, 8);
-			config.set(DtlsConfig.DTLS_RETRANSMISSION_TIMEOUT, 3, TimeUnit.SECONDS);
-			config.set(DtlsConfig.DTLS_ADDITIONAL_ECC_TIMEOUT, 8, TimeUnit.SECONDS);
-			config.set(TcpConfig.TCP_CONNECT_TIMEOUT, 15, TimeUnit.SECONDS);
-			config.set(TcpConfig.TCP_CONNECTION_IDLE_TIMEOUT, 60, TimeUnit.MINUTES);
-			config.set(TcpConfig.TLS_HANDSHAKE_TIMEOUT, 60, TimeUnit.SECONDS);
-			config.set(EXTERNAL_UDP_MAX_MESSAGE_SIZE, 64);
-			config.set(EXTERNAL_UDP_PREFERRED_BLOCK_SIZE, 64);
-			config.set(UDP_DROPS_READ_INTERVAL, 2000, TimeUnit.MILLISECONDS);
-		}
+	private static DefinitionsProvider DEFAULTS = (config) -> {
+		config.set(SystemConfig.HEALTH_STATUS_INTERVAL, 300, TimeUnit.SECONDS);
+		config.set(CoapConfig.MAX_RESOURCE_BODY_SIZE, DEFAULT_MAX_RESOURCE_SIZE);
+		config.set(CoapConfig.MAX_MESSAGE_SIZE, DEFAULT_BLOCK_SIZE);
+		config.set(CoapConfig.PREFERRED_BLOCK_SIZE, DEFAULT_BLOCK_SIZE);
+		config.set(CoapConfig.NOTIFICATION_CHECK_INTERVAL_COUNT, 4);
+		config.set(CoapConfig.NOTIFICATION_CHECK_INTERVAL_TIME, 30, TimeUnit.SECONDS);
+		config.set(CoapConfig.TCP_NUMBER_OF_BULK_BLOCKS, 1);
+		config.set(CoapConfig.MAX_ACTIVE_PEERS, 10000);
+		config.set(DtlsConfig.DTLS_RECOMMENDED_CIPHER_SUITES_ONLY, false);
+		config.set(DtlsConfig.DTLS_AUTO_HANDSHAKE_TIMEOUT, null, TimeUnit.SECONDS);
+		config.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, 6);
+		config.set(DtlsConfig.DTLS_PRESELECTED_CIPHER_SUITES, PRESELECTED_CIPHER_SUITES);
+		config.set(DtlsConfig.DTLS_MAX_CONNECTIONS, 10000);
+		config.set(DtlsConfig.DTLS_REMOVE_STALE_DOUBLE_PRINCIPALS, false);
+		config.set(DtlsConfig.DTLS_MAC_ERROR_FILTER_QUIET_TIME, 4, TimeUnit.SECONDS);
+		config.set(DtlsConfig.DTLS_MAC_ERROR_FILTER_THRESHOLD, 8);
+		config.set(DtlsConfig.DTLS_RETRANSMISSION_TIMEOUT, 3, TimeUnit.SECONDS);
+		config.set(DtlsConfig.DTLS_ADDITIONAL_ECC_TIMEOUT, 8, TimeUnit.SECONDS);
+		config.set(TcpConfig.TCP_CONNECT_TIMEOUT, 15, TimeUnit.SECONDS);
+		config.set(TcpConfig.TCP_CONNECTION_IDLE_TIMEOUT, 60, TimeUnit.MINUTES);
+		config.set(TcpConfig.TLS_HANDSHAKE_TIMEOUT, 60, TimeUnit.SECONDS);
+		config.set(EXTERNAL_UDP_MAX_MESSAGE_SIZE, 64);
+		config.set(EXTERNAL_UDP_PREFERRED_BLOCK_SIZE, 64);
+		config.set(UDP_DROPS_READ_INTERVAL, 2000, TimeUnit.MILLISECONDS);
 	};
 
 	public static class BaseConfig {
@@ -316,7 +311,7 @@ public class PlugtestServer extends AbstractTestServer {
 	private static final Config config = new Config();
 
 	private static PlugtestServer server;
-	private static EncryptedServersSerializationUtil serversSerialization = new EncryptedServersSerializationUtil();
+	private static EncryptedPersistentComponentUtil serialization = new EncryptedPersistentComponentUtil();
 	private static List<CoapServer> servers = new CopyOnWriteArrayList<>();
 	private static byte[] state;
 
@@ -336,7 +331,7 @@ public class PlugtestServer extends AbstractTestServer {
 	}
 
 	public static void main(String[] args) {
-		
+
 		CommandLine cmd = new CommandLine(config);
 		try {
 			ParseResult result = cmd.parseArgs(args);
@@ -356,12 +351,10 @@ public class PlugtestServer extends AbstractTestServer {
 			System.exit(-1);
 		}
 		Configuration configuration = init(config);
-		load(config);
-		ScheduledExecutorService executor = ExecutorsUtil.newScheduledThreadPool(//
+		setupPersistence(config);
+		ProtocolScheduledExecutorService executor = ExecutorsUtil.newProtocolScheduledThreadPool(//
 				configuration.get(CoapConfig.PROTOCOL_STAGE_THREAD_COUNT), //
-				new NamedThreadFactory("CoapServer(main)#")); //$NON-NLS-1$
-		ScheduledExecutorService secondaryExecutor = ExecutorsUtil
-				.newDefaultSecondaryScheduler("CoapServer(secondary)#");
+				new NamedThreadFactory("CoapServer#")); //$NON-NLS-1$
 
 		EndpointNetSocketObserver socketObserver = null;
 		final NetSocketHealthLogger socketLogger = new NetSocketHealthLogger("udp");
@@ -369,19 +362,13 @@ public class PlugtestServer extends AbstractTestServer {
 		if (interval > 0 && socketLogger.isEnabled()) {
 			long readInterval = configuration.get(UDP_DROPS_READ_INTERVAL, TimeUnit.MILLISECONDS);
 			if (interval > readInterval) {
-				secondaryExecutor.scheduleAtFixedRate(new Runnable() {
-
-					@Override
-					public void run() {
-						socketLogger.read();
-					}
-				}, readInterval, readInterval, TimeUnit.MILLISECONDS);
+				executor.scheduleBackgroundAtFixedRate(() -> socketLogger.read(), readInterval, readInterval, TimeUnit.MILLISECONDS);
 			}
 			socketObserver = new EndpointNetSocketObserver(socketLogger);
 		}
-		start(executor, secondaryExecutor, config, configuration, socketObserver, new ActiveInputReader());
+		start(executor, config, configuration, socketObserver, new ActiveInputReader());
 		LOGGER.info("Executor shutdown ...");
-		ExecutorsUtil.shutdownExecutorGracefully(500, executor, secondaryExecutor);
+		ExecutorsUtil.shutdownExecutorGracefully(500, executor);
 		exit();
 		LOGGER.info("Exit ...");
 	}
@@ -436,15 +423,20 @@ public class PlugtestServer extends AbstractTestServer {
 
 			long notifyIntervalMillis = config.getNotifyIntervalMillis();
 
-			server = new PlugtestServer(configuration, protocolConfig, notifyIntervalMillis, oscoreCtxDb, oscoreServerRid);
+			server = new PlugtestServer(configuration, protocolConfig, notifyIntervalMillis, oscoreCtxDb,
+					oscoreServerRid);
 			server.setVersion(CALIFORNIUM_BUILD_VERSION);
 			server.setTag("PLUG-TEST");
 			add(server);
 			// ETSI Plugtest environment
-			// server.addEndpoint(new CoAPEndpoint(new InetSocketAddress("::1", port)));
-			// server.addEndpoint(new CoAPEndpoint(new InetSocketAddress("127.0.0.1", port)));
-			// server.addEndpoint(new CoAPEndpoint(new InetSocketAddress("2a01:c911:0:2010::10", port)));
-			// server.addEndpoint(new CoAPEndpoint(new InetSocketAddress("10.200.1.2", port)));
+			// server.addEndpoint(new CoAPEndpoint(new InetSocketAddress("::1",
+			// port)));
+			// server.addEndpoint(new CoAPEndpoint(new
+			// InetSocketAddress("127.0.0.1", port)));
+			// server.addEndpoint(new CoAPEndpoint(new
+			// InetSocketAddress("2a01:c911:0:2010::10", port)));
+			// server.addEndpoint(new CoAPEndpoint(new
+			// InetSocketAddress("10.200.1.2", port)));
 			server.addEndpoints(config);
 			if (server.getEndpoints().isEmpty()) {
 				System.err.println("no endpoint available!");
@@ -462,15 +454,22 @@ public class PlugtestServer extends AbstractTestServer {
 
 	public static void add(CoapServer server) {
 		servers.add(server);
-		serversSerialization.add(server);
+		serialization.addProvider(server);
 	}
 
-	public static void load(BaseConfig config) {
+	public static void setupPersistence(BaseConfig config) {
 
 		if (config.store != null) {
+			Runnable hook = new Runnable() {
+
+				@Override
+				public void run() {
+					stopAll();
+				}
+			};
 			char[] password64 = config.store.password64 == null ? null : config.store.password64.toCharArray();
-			serversSerialization.loadAndRegisterShutdown(config.store.file, password64,
-					TimeUnit.HOURS.toSeconds(config.store.maxAge));
+			serialization.loadAndRegisterShutdown(config.store.file, password64,
+					TimeUnit.HOURS.toSeconds(config.store.maxAge), hook);
 		}
 	}
 
@@ -478,14 +477,15 @@ public class PlugtestServer extends AbstractTestServer {
 		if (state != null) {
 			SecretKey key = toKey(password);
 			ByteArrayInputStream in = new ByteArrayInputStream(state);
-			serversSerialization.loadServers(in, key);
+			stopAll();
+			serialization.loadComponents(in, key);
 			if (key == null) {
 				LOGGER.info("Loaded: {} Bytes", state.length);
 			} else {
 				LOGGER.info("Loaded: {} Bytes (pw: {})", state.length, password);
 			}
 			state = null;
-			serversSerialization.start();
+			startAll();
 			SecretUtil.destroy(key);
 			try {
 				in.close();
@@ -496,16 +496,16 @@ public class PlugtestServer extends AbstractTestServer {
 		}
 	}
 
-	public static AbstractTestServer start(ScheduledExecutorService mainExecutor, ScheduledExecutorService secondaryExecutor,
-			BaseConfig config, Configuration configuration, EndpointNetSocketObserver observer,
-			ActiveInputReader inputReader) {
+	public static AbstractTestServer start(ProtocolScheduledExecutorService executor,
+			BaseConfig config, Configuration configuration,
+			EndpointNetSocketObserver observer, ActiveInputReader inputReader) {
 
 		if (server != null) {
-			server.setExecutors(mainExecutor, secondaryExecutor, true);
+			server.setExecutor(executor, true);
 			if (observer != null) {
 				server.addDefaultEndpointObserver(observer);
 			}
-			server.add(new Echo(configuration, config.echoDelay ? mainExecutor : null));
+			server.add(new Echo(configuration, config.echoDelay ? executor : null));
 			server.start();
 			server.addLogger(true);
 
@@ -539,6 +539,18 @@ public class PlugtestServer extends AbstractTestServer {
 		return server;
 	}
 
+	public static void startAll() {
+		for (CoapServer server : servers) {
+			server.start();
+		}
+	}
+
+	public static void stopAll() {
+		for (CoapServer server : servers) {
+			server.stop();
+		}
+	}
+
 	public static void dumpAll() {
 		for (CoapServer server : servers) {
 			server.dump();
@@ -559,7 +571,8 @@ public class PlugtestServer extends AbstractTestServer {
 		}
 		try {
 			// max age 10 minutes
-			serversSerialization.saveServers(out, key, 60 * 10);
+			stopAll();
+			serialization.saveComponents(out, key, 60 * 10);
 			state = out.toByteArray();
 			out.close();
 			if (key == null) {

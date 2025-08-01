@@ -18,10 +18,10 @@ package org.eclipse.californium.plugtests.resources;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.*;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.*;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.coap.LinkFormat;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.elements.util.Bytes;
 
 /**
@@ -50,6 +50,7 @@ public class LargeCreate extends CoapResource {
 		super(resourceIdentifier);
 		getAttributes().setTitle("Large resource that can be created using POST method");
 		getAttributes().addResourceType("block");
+		addSupportedContentFormats(APPLICATION_LINK_FORMAT);
 	}
 
 	// REST Operations /////////////////////////////////////////////////////////
@@ -89,8 +90,7 @@ public class LargeCreate extends CoapResource {
 			
 			this.data = post != null ? post : Bytes.EMPTY;
 			this.dataCt = ct;
-			
-			getAttributes().addContentType(dataCt);
+			addSupportedContentFormats(ct);
 			getAttributes().setMaximumSizeEstimate(data.length);
 		}
 		

@@ -44,7 +44,6 @@ import java.security.cert.X509Certificate;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -63,6 +62,7 @@ import org.eclipse.californium.elements.category.Medium;
 import org.eclipse.californium.elements.rule.TestNameLoggerRule;
 import org.eclipse.californium.elements.rule.ThreadsRule;
 import org.eclipse.californium.elements.util.ExecutorsUtil;
+import org.eclipse.californium.elements.util.ProtocolScheduledExecutorService;
 import org.eclipse.californium.elements.util.SimpleMessageCallback;
 import org.eclipse.californium.elements.util.TestConditionTools;
 import org.eclipse.californium.elements.util.TestScope;
@@ -73,24 +73,23 @@ import org.eclipse.californium.scandium.ConnectorHelper.LatchDecrementingRawData
 import org.eclipse.californium.scandium.ConnectorHelper.TestContext;
 import org.eclipse.californium.scandium.auth.ApplicationLevelInfoSupplier;
 import org.eclipse.californium.scandium.config.DtlsConfig;
-import org.eclipse.californium.scandium.config.DtlsConnectorConfig;
 import org.eclipse.californium.scandium.config.DtlsConfig.DtlsSecureRenegotiation;
+import org.eclipse.californium.scandium.config.DtlsConnectorConfig;
 import org.eclipse.californium.scandium.config.DtlsConnectorConfig.Builder;
 import org.eclipse.californium.scandium.dtls.CertificateType;
 import org.eclipse.californium.scandium.dtls.Connection;
 import org.eclipse.californium.scandium.dtls.DTLSSession;
 import org.eclipse.californium.scandium.dtls.DtlsTestTools;
 import org.eclipse.californium.scandium.dtls.ExtendedMasterSecretMode;
-import org.eclipse.californium.scandium.dtls.ResumptionSupportingConnectionStore;
+import org.eclipse.californium.scandium.dtls.ConnectionStore;
 import org.eclipse.californium.scandium.dtls.SessionId;
 import org.eclipse.californium.scandium.dtls.TestInMemorySessionStore;
-import org.eclipse.californium.scandium.dtls.HelloExtension.ExtensionType;
 import org.eclipse.californium.scandium.dtls.cipher.CipherSuite;
-import org.eclipse.californium.scandium.dtls.pskstore.AdvancedMultiPskStore;
-import org.eclipse.californium.scandium.dtls.pskstore.AsyncAdvancedPskStore;
+import org.eclipse.californium.scandium.dtls.pskstore.MultiPskStore;
+import org.eclipse.californium.scandium.dtls.pskstore.AsyncPskStore;
 import org.eclipse.californium.scandium.dtls.resumption.AsyncResumptionVerifier;
 import org.eclipse.californium.scandium.dtls.x509.AsyncCertificateProvider;
-import org.eclipse.californium.scandium.dtls.x509.AsyncNewAdvancedCertificateVerifier;
+import org.eclipse.californium.scandium.dtls.x509.AsyncCertificateVerifier;
 import org.eclipse.californium.scandium.dtls.x509.SingleCertificateProvider;
 import org.eclipse.californium.scandium.rule.DtlsNetworkRule;
 import org.junit.After;
@@ -128,17 +127,17 @@ public class DTLSConnectorResumeTest {
 	public static ThreadsRule cleanup = new ThreadsRule();
 
 	static ConnectorHelper serverHelper;
-	static AsyncAdvancedPskStore serverPskStore;
+	static AsyncPskStore serverPskStore;
 	static AsyncCertificateProvider serverCertificateProvider;
-	static AsyncNewAdvancedCertificateVerifier serverCertificateVerifier;
+	static AsyncCertificateVerifier serverCertificateVerifier;
 	static AsyncResumptionVerifier serverResumptionVerifier;
-	static ExecutorService executor;
+	static ProtocolScheduledExecutorService executor;
 	static PrivateKey clientPrivateKey;
 	static X509Certificate[] clientCertificateChain;
-	static AsyncAdvancedPskStore clientPskStore;
+	static AsyncPskStore clientPskStore;
 	static AsyncCertificateProvider clientCertificateProvider;
-	static AsyncNewAdvancedCertificateVerifier clientCertificateVerifier;
-	static AdvancedMultiPskStore clientInMemoryPskStore;
+	static AsyncCertificateVerifier clientCertificateVerifier;
+	static MultiPskStore clientInMemoryPskStore;
 	static AtomicReference<AdditionalInfo> applicationInfo = new AtomicReference<>();
 
 	private static final int CLIENT_CONNECTION_STORE_CAPACITY = 5;
@@ -153,7 +152,7 @@ public class DTLSConnectorResumeTest {
 
 	Class<?> clientPrincipalType;
 	DTLSConnector client;
-	ResumptionSupportingConnectionStore clientConnectionStore;
+	ConnectionStore clientConnectionStore;
 	DtlsHealthLogger clientHealth;
 
 	public static interface TypedBuilderSetup extends BuilderSetup {
@@ -192,7 +191,7 @@ public class DTLSConnectorResumeTest {
 				serverResumptionVerifier.setDelay(0);
 				builder.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, 0)
 						.setAsList(DtlsConfig.DTLS_CIPHER_SUITES, CipherSuite.TLS_PSK_WITH_AES_128_CCM_8)
-						.setAdvancedPskStore(clientPskStore);
+						.setPskStore(clientPskStore);
 			}
 
 		}, new TypedBuilderSetup() {
@@ -206,7 +205,6 @@ public class DTLSConnectorResumeTest {
 				return PreSharedKeyIdentity.class;
 			}
 
-			@SuppressWarnings("deprecation")
 			@Override
 			public void setup(Builder builder) {
 				clientPskStore.setDelay(100);
@@ -216,9 +214,8 @@ public class DTLSConnectorResumeTest {
 				serverResumptionVerifier.setDelay(100);
 				builder.set(DtlsConfig.DTLS_USE_MULTI_HANDSHAKE_MESSAGE_RECORDS, true)
 						.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, 4)
-						.set(DtlsConfig.DTLS_USE_DEPRECATED_CID, ExtensionType.CONNECTION_ID_DEPRECATED.getId())
 						.setAsList(DtlsConfig.DTLS_CIPHER_SUITES, CipherSuite.TLS_PSK_WITH_AES_128_CCM_8)
-						.setAdvancedPskStore(clientPskStore);
+						.setPskStore(clientPskStore);
 			}
 
 		}, new TypedBuilderSetup() {
@@ -239,9 +236,10 @@ public class DTLSConnectorResumeTest {
 				clientPskStore.setSecretMode(false);
 				serverPskStore.setSecretMode(false);
 				serverResumptionVerifier.setDelay(0);
-				builder.set(DtlsConfig.DTLS_USE_MULTI_HANDSHAKE_MESSAGE_RECORDS, true)
+				builder.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, -1)
+						.set(DtlsConfig.DTLS_USE_MULTI_HANDSHAKE_MESSAGE_RECORDS, true)
 						.setAsList(DtlsConfig.DTLS_CIPHER_SUITES, CipherSuite.TLS_PSK_WITH_AES_128_CCM_8)
-						.setAdvancedPskStore(clientPskStore);
+						.setPskStore(clientPskStore);
 			}
 
 		}, new TypedBuilderSetup() {
@@ -262,8 +260,9 @@ public class DTLSConnectorResumeTest {
 				clientPskStore.setSecretMode(false);
 				serverPskStore.setSecretMode(false);
 				serverResumptionVerifier.setDelay(100);
-				builder.setAsList(DtlsConfig.DTLS_CIPHER_SUITES, CipherSuite.TLS_PSK_WITH_AES_128_CCM_8)
-						.setAdvancedPskStore(clientPskStore);
+				builder.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, -1)
+						.setAsList(DtlsConfig.DTLS_CIPHER_SUITES, CipherSuite.TLS_PSK_WITH_AES_128_CCM_8)
+						.setPskStore(clientPskStore);
 			}
 
 		}, new TypedBuilderSetup() {
@@ -286,7 +285,7 @@ public class DTLSConnectorResumeTest {
 				serverResumptionVerifier.setDelay(100);
 				builder.set(DtlsConfig.DTLS_USE_MULTI_HANDSHAKE_MESSAGE_RECORDS, true)
 						.setAsList(DtlsConfig.DTLS_CIPHER_SUITES, CipherSuite.TLS_ECDHE_PSK_WITH_AES_128_CCM_8_SHA256)
-						.setAdvancedPskStore(clientPskStore);
+						.setPskStore(clientPskStore);
 			}
 
 		}, new TypedBuilderSetup() {
@@ -308,7 +307,7 @@ public class DTLSConnectorResumeTest {
 				serverPskStore.setSecretMode(false);
 				serverResumptionVerifier.setDelay(0);
 				builder.setAsList(DtlsConfig.DTLS_CIPHER_SUITES, CipherSuite.TLS_ECDHE_PSK_WITH_AES_128_CCM_8_SHA256)
-						.setAdvancedPskStore(clientPskStore);
+						.setPskStore(clientPskStore);
 			}
 
 		}, new TypedBuilderSetup() {
@@ -332,7 +331,7 @@ public class DTLSConnectorResumeTest {
 				builder.setAsList(DtlsConfig.DTLS_CIPHER_SUITES, CipherSuite.TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8)
 						.setCertificateIdentityProvider(new SingleCertificateProvider(clientPrivateKey,
 								clientCertificateChain, CertificateType.X_509))
-						.setAdvancedCertificateVerifier(clientCertificateVerifier);
+						.setCertificateVerifier(clientCertificateVerifier);
 			}
 		}, new TypedBuilderSetup() {
 
@@ -356,7 +355,7 @@ public class DTLSConnectorResumeTest {
 						.setAsList(DtlsConfig.DTLS_CIPHER_SUITES, CipherSuite.TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8)
 						.setCertificateIdentityProvider(new SingleCertificateProvider(clientPrivateKey,
 								clientCertificateChain, CertificateType.X_509))
-						.setAdvancedCertificateVerifier(clientCertificateVerifier);
+						.setCertificateVerifier(clientCertificateVerifier);
 			}
 		}, new TypedBuilderSetup() {
 
@@ -380,7 +379,7 @@ public class DTLSConnectorResumeTest {
 						.setAsList(DtlsConfig.DTLS_CIPHER_SUITES, CipherSuite.TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8)
 						.setCertificateIdentityProvider(new SingleCertificateProvider(clientPrivateKey,
 								clientCertificateChain, CertificateType.RAW_PUBLIC_KEY))
-						.setAdvancedCertificateVerifier(clientCertificateVerifier);
+						.setCertificateVerifier(clientCertificateVerifier);
 			}
 		}, new TypedBuilderSetup() {
 
@@ -404,7 +403,7 @@ public class DTLSConnectorResumeTest {
 						.setAsList(DtlsConfig.DTLS_CIPHER_SUITES, CipherSuite.TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8)
 						.setCertificateIdentityProvider(new SingleCertificateProvider(clientPrivateKey,
 								clientCertificateChain, CertificateType.RAW_PUBLIC_KEY))
-						.setAdvancedCertificateVerifier(clientCertificateVerifier);
+						.setCertificateVerifier(clientCertificateVerifier);
 			}
 		} };
 
@@ -420,7 +419,6 @@ public class DTLSConnectorResumeTest {
 	 * 
 	 * @throws Exception if the connector cannot be started.
 	 */
-	@SuppressWarnings("deprecation")
 	@BeforeClass
 	public static void startServer() throws Exception {
 
@@ -432,12 +430,12 @@ public class DTLSConnectorResumeTest {
 			}
 		};
 
-		AdvancedMultiPskStore pskStore = new AdvancedMultiPskStore();
+		MultiPskStore pskStore = new MultiPskStore();
 		pskStore.setKey(CLIENT_IDENTITY, CLIENT_IDENTITY_SECRET.getBytes());
 		pskStore.setKey(SCOPED_CLIENT_IDENTITY, SCOPED_CLIENT_IDENTITY_SECRET.getBytes(), SERVERNAME);
 		pskStore.setKey(SCOPED_CLIENT_IDENTITY, SCOPED_CLIENT_IDENTITY_SECRET.getBytes(), SERVERNAME_ALT);
-		serverPskStore = new AsyncAdvancedPskStore(pskStore);
-		serverCertificateVerifier = (AsyncNewAdvancedCertificateVerifier) AsyncNewAdvancedCertificateVerifier.builder()
+		serverPskStore = new AsyncPskStore(pskStore);
+		serverCertificateVerifier = AsyncCertificateVerifier.builder()
 				.setTrustedCertificates(DtlsTestTools.getTrustedCertificates()).setTrustAllRPKs().build();
 		serverResumptionVerifier = new AsyncResumptionVerifier();
 
@@ -448,28 +446,27 @@ public class DTLSConnectorResumeTest {
 
 		serverHelper.serverBuilder.set(DtlsConfig.DTLS_USE_SERVER_NAME_INDICATION, true)
 				.set(DtlsConfig.DTLS_CONNECTION_ID_LENGTH, 6)
-				.set(DtlsConfig.DTLS_SUPPORT_DEPRECATED_CID, true)
 				.setSessionStore(new TestInMemorySessionStore(false))
 				.setApplicationLevelInfoSupplier(supplier)
-				.setAdvancedCertificateVerifier(serverCertificateVerifier)
-				.setAdvancedPskStore(serverPskStore)
+				.setCertificateVerifier(serverCertificateVerifier)
+				.setPskStore(serverPskStore)
 				.setCertificateIdentityProvider(serverCertificateProvider)
 				.setResumptionVerifier(serverResumptionVerifier);
 
 		serverHelper.startServer();
-		executor = ExecutorsUtil.newFixedThreadPool(2, new TestThreadFactory("DTLS-RESUME-"));
+		executor = ExecutorsUtil.newProtocolScheduledThreadPool(2, new TestThreadFactory("DTLS-RESUME-"));
 		clientPrivateKey = DtlsTestTools.getClientPrivateKey();
 		clientCertificateChain = DtlsTestTools.getClientCertificateChain();
 
-		clientInMemoryPskStore = new AdvancedMultiPskStore();
+		clientInMemoryPskStore = new MultiPskStore();
 		clientInMemoryPskStore.addKnownPeer(serverHelper.serverEndpoint, CLIENT_IDENTITY,
 				CLIENT_IDENTITY_SECRET.getBytes());
 		clientInMemoryPskStore.addKnownPeer(serverHelper.serverEndpoint, SERVERNAME, SCOPED_CLIENT_IDENTITY,
 				SCOPED_CLIENT_IDENTITY_SECRET.getBytes());
 		clientInMemoryPskStore.addKnownPeer(serverHelper.serverEndpoint, SERVERNAME_ALT, SCOPED_CLIENT_IDENTITY,
 				SCOPED_CLIENT_IDENTITY_SECRET.getBytes());
-		clientPskStore = new AsyncAdvancedPskStore(clientInMemoryPskStore);
-		clientCertificateVerifier = (AsyncNewAdvancedCertificateVerifier) AsyncNewAdvancedCertificateVerifier.builder()
+		clientPskStore = new AsyncPskStore(clientInMemoryPskStore);
+		clientCertificateVerifier = AsyncCertificateVerifier.builder()
 				.setTrustedCertificates(DtlsTestTools.getTrustedCertificates()).setTrustAllRPKs().build();
 		clientCertificateProvider = new AsyncCertificateProvider(clientPrivateKey, clientCertificateChain,
 				CertificateType.RAW_PUBLIC_KEY, CertificateType.X_509);
@@ -591,7 +588,7 @@ public class DTLSConnectorResumeTest {
 		long time = connection.getEstablishedSession().getCreationTime();
 
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		client.saveConnections(out, 1000);
+		client.save(out, 1000);
 		ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
 		// create a new client with different inetAddress but with the same
 		// session store.
@@ -601,7 +598,7 @@ public class DTLSConnectorResumeTest {
 		client = new DTLSConnector(clientConfig, clientConnectionStore);
 		LatchDecrementingRawDataChannel clientRawDataChannel = new LatchDecrementingRawDataChannel(1);
 		client.setRawDataReceiver(clientRawDataChannel);
-		client.loadConnections(in, 0);
+		client.load(in, 0);
 		client.start();
 
 		// Prepare message sending
@@ -824,7 +821,7 @@ public class DTLSConnectorResumeTest {
 		assertThat(connection.getEstablishedSession().getSessionIdentifier(), is(sessionId));
 		assertClientIdentity(clientPrincipalType);
 
-		peer = serverHelper.getEstablishedServerDtlsSession(client.getAddress()).getPeerIdentity();
+		peer = serverHelper.getServersClientIdentity(client.getAddress());
 		assertThat(peer, is(instanceOf(ExtensiblePrincipal.class)));
 		principal = (ExtensiblePrincipal<?>) peer;
 		assertThat(principal.getExtendedInfo().get(KEY_DEVICE_ID, String.class), is(DEVICE_ID));
@@ -841,7 +838,7 @@ public class DTLSConnectorResumeTest {
 		// second client with same address
 		DtlsConnectorConfig clientConfig2 = createClientConfigBuilder("client-2", clientTestContext.getClientAddress())
 				.set(DtlsConfig.DTLS_USE_SERVER_NAME_INDICATION, true).build();
-		ResumptionSupportingConnectionStore clientConnectionStore2 = ConnectorHelper.createDebugConnectionStore(clientConfig2);
+		ConnectionStore clientConnectionStore2 = ConnectorHelper.createDebugConnectionStore(clientConfig2);
 		
 		DTLSConnector client2 = new DTLSConnector(clientConfig2, clientConnectionStore2);
 		client2.setExecutor(executor);

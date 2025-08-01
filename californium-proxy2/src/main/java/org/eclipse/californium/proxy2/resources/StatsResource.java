@@ -26,11 +26,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.coap.CoAP.ResponseCode;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
 import org.eclipse.californium.core.coap.Response;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.elements.util.ClockUtil;
 
 import com.google.common.cache.CacheStats;
@@ -141,7 +141,7 @@ public class StatsResource extends CoapResource {
 		 */
 		public CacheStatResource(String resourceIdentifier, CacheResource cacheResource) {
 			super(resourceIdentifier);
-
+			addSupportedContentFormats(MediaTypeRegistry.TEXT_PLAIN);
 			this.cacheResource = cacheResource;
 			relativeCacheStats = cacheResource.getCacheStats();
 		}
@@ -232,6 +232,7 @@ public class StatsResource extends CoapResource {
 
 		public ProxyStatResource(String resourceIdentifier) {
 			super(resourceIdentifier);
+			addSupportedContentFormats(MediaTypeRegistry.TEXT_PLAIN);
 		}
 
 		@Override

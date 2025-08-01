@@ -25,6 +25,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
@@ -79,6 +80,7 @@ public class PersistentComponentUtilTest {
 		util.saveComponents(out, 1000);
 		ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
 		util = setup(connector2);
+		logging.setLoggingLevel("ERROR", PersistentComponentUtil.class);
 		util.loadComponents(in);
 		assertThat(connector1.data, is(nullValue()));
 		assertArrayEquals(connector2.mark, connector2.data);
@@ -91,6 +93,7 @@ public class PersistentComponentUtilTest {
 		util.saveComponents(out, 1000);
 		ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
 		util = setup(connector1);
+		logging.setLoggingLevel("ERROR", PersistentComponentUtil.class);
 		util.loadComponents(in);
 		assertArrayEquals(connector1.mark, connector1.data);
 		assertThat(connector2.data, is(nullValue()));
@@ -116,6 +119,7 @@ public class PersistentComponentUtilTest {
 		util.saveComponents(out, key, 1000);
 		ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
 		util = setup(connector2);
+		logging.setLoggingLevel("ERROR", PersistentComponentUtil.class);
 		util.loadComponents(in, key);
 		assertThat(connector1.data, is(nullValue()));
 		assertArrayEquals(connector2.mark, connector2.data);
@@ -129,6 +133,7 @@ public class PersistentComponentUtilTest {
 		util.saveComponents(out, key, 1000);
 		ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
 		util = setup(connector1);
+		logging.setLoggingLevel("ERROR", PersistentComponentUtil.class);
 		util.loadComponents(in, key);
 		assertArrayEquals(connector1.mark, connector1.data);
 		assertThat(connector2.data, is(nullValue()));
@@ -142,6 +147,7 @@ public class PersistentComponentUtilTest {
 		util.saveComponents(out, key, 1000);
 		ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
 		util = setup(connector1, connector3);
+		logging.setLoggingLevel("ERROR", PersistentComponentUtil.class);
 		util.loadComponents(in, key);
 		assertArrayEquals(connector1.mark, connector1.data);
 		assertThat(connector2.data, is(nullValue()));
@@ -181,7 +187,7 @@ public class PersistentComponentUtilTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		util.saveComponents(out, 1000);
 		ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
-		logging.setLoggingLevel("ERROR", PersistentComponentUtil.class);
+		logging.setLoggingLevel("ERROR", EncryptedStreamUtil.class);
 		util.loadComponents(in, key);
 		assertThat(connector1.data, is(nullValue()));
 		assertThat(connector2.data, is(nullValue()));

@@ -16,6 +16,7 @@ package org.eclipse.californium.core.coap.option;
 
 import org.eclipse.californium.core.coap.Option;
 import org.eclipse.californium.core.coap.OptionNumberRegistry.OptionFormat;
+import org.eclipse.californium.elements.util.DatagramReader;
 
 /**
  * Option definition.
@@ -24,17 +25,7 @@ import org.eclipse.californium.core.coap.OptionNumberRegistry.OptionFormat;
  * 
  * @since 3.8
  */
-public interface OptionDefinition {
-
-	/**
-	 * Returns the option number.
-	 * 
-	 * @return the option number
-	 * 
-	 * @see <a href="https://www.rfc-editor.org/rfc/rfc7252#section-5.4.6"
-	 *      target= "_blank">RFC7252 5.4.6. Option Numbers</a>
-	 */
-	int getNumber();
+public interface OptionDefinition extends OptionNumber {
 
 	/**
 	 * Get name of option.
@@ -51,28 +42,16 @@ public interface OptionDefinition {
 	String toString();
 
 	/**
-	 * Create option from byte array.
+	 * Creates option from reader.
 	 * 
-	 * @param value the option value
-	 * @return create options
+	 * @param reader datagram reader to read the option value
+	 * @param length length of the option value
+	 * @return created option
+	 * @throws NullPointerException if reader is {@code null}.
+	 * @throws IllegalArgumentException if value doesn't match the definition.
+	 * @since 4.0
 	 */
-	Option create(byte[] value);
-
-	/**
-	 * Create option from string.
-	 * 
-	 * @param value the option value
-	 * @return create options
-	 */
-	Option create(String value);
-
-	/**
-	 * Create option from long.
-	 * 
-	 * @param value the option value
-	 * @return create options
-	 */
-	Option create(long value);
+	Option create(DatagramReader reader, int length);
 
 	/**
 	 * Get option format.
@@ -85,33 +64,12 @@ public interface OptionDefinition {
 	OptionFormat getFormat();
 
 	/**
-	 * Checks whether an option has a single value.
+	 * Asserts the value length matches the options's definition.
 	 * 
-	 * @return {@code true}, if the option has a single value, {@code false}, if
-	 *         the option is repeatable
-	 * 
-	 * @see <a href="https://www.rfc-editor.org/rfc/rfc7252#section-5.4.5"
-	 *      target= "_blank">RFC7252 5.4.5. Repeatable Options</a>
+	 * @param length length to check
+	 * @throws IllegalArgumentException if length doesn't match the definition
+	 * @since 4.0
 	 */
-	boolean isSingleValue();
-
-	/**
-	 * Assert, that the value matches the custom options's definition.
-	 * 
-	 * @param value value to check
-	 * @throws IllegalArgumentException if value doesn't match the definition
-	 */
-	void assertValue(byte[] value);
-
-	/**
-	 * Get value length of custom option.
-	 * 
-	 * @return array with minimum and maximum length of values. If both are
-	 *         equal, the array may contain only one length. If {@code null} is
-	 *         returned, the default lengths of values is used.
-	 * @deprecated obsolete, use {@link OptionDefinition#assertValue(byte[])}
-	 */
-	@Deprecated
-	int[] getValueLengths();
+	void assertValueLength(int length);
 
 }

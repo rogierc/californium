@@ -18,9 +18,9 @@ package org.eclipse.californium.plugtests.resources;
 import static org.eclipse.californium.core.coap.CoAP.ResponseCode.*;
 import static org.eclipse.californium.core.coap.MediaTypeRegistry.*;
 
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.coap.Request;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.core.server.resources.Resource;
 
 /**
@@ -31,6 +31,7 @@ public class LongPath extends CoapResource {
 
 	public LongPath() {
 		this("seg1");
+		addSupportedContentFormats(TEXT_PLAIN);
 
 		Resource seg2 = new LongPath("seg2");
 		Resource seg3 = new LongPath("seg3");

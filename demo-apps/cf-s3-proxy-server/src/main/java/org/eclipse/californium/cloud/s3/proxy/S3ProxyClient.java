@@ -21,8 +21,9 @@ import org.eclipse.californium.core.coap.Response;
 
 /**
  * S3 proxy client.
- * 
- * Implements PUT and GET for device objects and load for other resources.
+ * <p>
+ * Implements PUT and GET for device objects and SAVE, LOAD, LIST and DELETE for
+ * other resources.
  * 
  * @since 3.12
  */
@@ -34,14 +35,14 @@ public interface S3ProxyClient extends ExternalEndpointProvider {
 	String DEFAULT_REGION = "us-east-1";
 
 	/**
-	 * Get default S3 ACL.
+	 * Gets default S3 ACL.
 	 * 
 	 * @return default S3 ACL
 	 */
 	String getAcl();
 
 	/**
-	 * Execute S3 PUT request.
+	 * Executes S3 PUT request for device data.
 	 * 
 	 * @param request PUT request
 	 * @param handler callback for coap-response
@@ -49,7 +50,7 @@ public interface S3ProxyClient extends ExternalEndpointProvider {
 	void put(S3ProxyRequest request, Consumer<Response> handler);
 
 	/**
-	 * Execute S3 GET request.
+	 * Executes S3 GET request for device data.
 	 * 
 	 * @param request GET request
 	 * @param handler callback for coap-response
@@ -57,7 +58,16 @@ public interface S3ProxyClient extends ExternalEndpointProvider {
 	void get(S3ProxyRequest request, Consumer<Response> handler);
 
 	/**
-	 * Execute S3 GET request.
+	 * Executes S3 PUT request.
+	 * 
+	 * @param request PUT request
+	 * @param handler callback for resource content
+	 * @since 3.13
+	 */
+	void save(S3PutRequest request, final Consumer<S3Response> handler);
+
+	/**
+	 * Executes S3 GET request.
 	 * 
 	 * @param request GET request
 	 * @param handler callback for resource content
@@ -65,11 +75,21 @@ public interface S3ProxyClient extends ExternalEndpointProvider {
 	void load(S3Request request, final Consumer<S3Response> handler);
 
 	/**
-	 * Execute S3 PUT request.
+	 * Executes S3 LIST request.
 	 * 
-	 * @param request PUT request
-	 * @param handler callback for resource content
+	 * @param request LIST request
+	 * @param handler callback for list response
+	 * @since 3.13
 	 */
-	void save(S3PutRequest request, final Consumer<S3Response> handler);
+	void list(S3ListRequest request, final Consumer<S3ListResponse> handler);
+
+	/**
+	 * Executes S3 delete request.
+	 * 
+	 * @param request delete request
+	 * @param handler callback for delete response
+	 * @since 3.13
+	 */
+	void delete(S3Request request, final Consumer<S3Response> handler);
 
 }

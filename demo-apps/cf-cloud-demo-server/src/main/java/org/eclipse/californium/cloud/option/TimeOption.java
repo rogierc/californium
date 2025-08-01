@@ -18,17 +18,17 @@ import java.util.Date;
 import java.util.concurrent.TimeUnit;
 
 import org.eclipse.californium.core.coap.Message;
-import org.eclipse.californium.core.coap.Option;
 import org.eclipse.californium.core.coap.Request;
 import org.eclipse.californium.core.coap.Response;
-import org.eclipse.californium.core.coap.option.IntegerOptionDefinition;
+import org.eclipse.californium.core.coap.option.IntegerOption;
 import org.eclipse.californium.elements.util.ClockUtil;
+import org.eclipse.californium.elements.util.DatagramReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * CoAP custom time option.
- * 
+ * <p>
  * Used in {@link Request} to indicate the client's system-time in milliseconds.
  * If the used value is {@code 0} or differs from the system-time of the server
  * more than {@link #MAX_MILLISECONDS_DELTA}, the server adds also a
@@ -37,7 +37,7 @@ import org.slf4j.LoggerFactory;
  * 
  * @since 3.12
  */
-public class TimeOption extends Option {
+public class TimeOption extends IntegerOption {
 
 	/**
 	 * Logger.
@@ -50,20 +50,14 @@ public class TimeOption extends Option {
 	public static final int COAP_OPTION_TIME = 0xfde8;
 
 	/**
-	 * Maximum delta in milliseconds. If exceeded, {@link #adjust()} returns the
-	 * {@link TimeOption} to be added to the {@link Response}.
+	 * Maximum delta in milliseconds.
+	 * <p>
+	 * If exceeded, {@link #adjust()} returns the {@link TimeOption} to be added
+	 * to the {@link Response}.
 	 */
 	public static final long MAX_MILLISECONDS_DELTA = 5000;
 
-	public static final IntegerOptionDefinition DEFINITION = new IntegerOptionDefinition(COAP_OPTION_TIME, "Time",
-			true) {
-
-		@Override
-		public Option create(byte[] value) {
-			return new TimeOption(value);
-		}
-
-	};
+	public static final Definition DEFINITION = new Definition(COAP_OPTION_TIME, "Time");
 
 	/**
 	 * Adjust value, if times differ more than {@link #MAX_MILLISECONDS_DELTA}.
@@ -72,29 +66,9 @@ public class TimeOption extends Option {
 	 */
 	private boolean adjustTime;
 
-	/**
-	 * Create time option with current system time.
-	 */
-	public TimeOption() {
-		this(System.currentTimeMillis());
-	}
-
-	/**
-	 * Create time option.
-	 * 
-	 * @param time time in system milliseconds.
-	 */
-	public TimeOption(long time) {
-		super(DEFINITION, time);
-	}
-
-	/**
-	 * Create time option.
-	 * 
-	 * @param value time in system milliseconds as byte array.
-	 */
-	public TimeOption(byte[] value) {
-		super(DEFINITION, value);
+	@Override
+	public Definition getDefinition() {
+		return (Definition) super.getDefinition();
 	}
 
 	@Override
@@ -108,55 +82,66 @@ public class TimeOption extends Option {
 
 	/**
 	 * Get time option to adjust the device time.
-	 * 
+	 * <p>
 	 * Intended to be included in the response message, if indicated.
 	 * 
 	 * @return time option to adjust the device time, {@code null}, if the
 	 *         device time is already set.
 	 */
 	public TimeOption adjust() {
-		return adjustTime ? new TimeOption((IntegerOptionDefinition) getDefinition()) : null;
+		if (adjustTime) {
+			Definition definition = getDefinition();
+			return definition.create();
+		}
+		return null;
 	}
 
 	/**
 	 * Get time option from message or clock.
-	 * 
+	 * <p>
 	 * If message contains custom time option, return that. Otherwise use the
 	 * system receive time to create a time option to return.
 	 * 
 	 * @param message message with custom time option
 	 * @return the time option
+	 * @throws NullPointerException if message is {@code null}
 	 */
 	public static TimeOption getMessageTime(Message message) {
+		if (message == null) {
+			throw new NullPointerException("Message must not be null!");
+		}
 		long delta = ClockUtil.delta(message.getNanoTimestamp(), TimeUnit.MILLISECONDS);
 		long receiveTime = System.currentTimeMillis() - delta;
-		Option option = message.getOptions().getOtherOption(DEFINITION);
-		if (option == null) {
+		Definition definition = null;
+		TimeOption option = message.getOptions().getOtherOption(DEFINITION);
+		if (option != null) {
+			definition = DEFINITION;
+		} else {
 			option = message.getOptions().getOtherOption(DEPRECATED_DEFINITION);
+			if (option != null) {
+				definition = DEPRECATED_DEFINITION;
+			}
 		}
 		if (option != null) {
-			TimeOption time;
-			IntegerOptionDefinition definition = (IntegerOptionDefinition) option.getDefinition();
 			long value = option.getLongValue();
 			if (value == 0) {
-				time = new TimeOption(definition, receiveTime);
-				time.adjustTime = true;
+				option = definition.create(receiveTime);
+				option.adjustTime = true;
 				LOGGER.info("Time: send initial time");
 			} else {
-				time = (TimeOption) option;
 				delta = value - receiveTime;
 				if (Math.abs(delta) > MAX_MILLISECONDS_DELTA) {
 					// difference > 5s => send time fix back.
-					time.adjustTime = true;
+					option.adjustTime = true;
 					LOGGER.info("Time: {}ms delta => send fix", delta);
 				} else {
 					LOGGER.debug("Time: {}ms delta", delta);
 				}
 			}
-			return time;
+			return option;
 		} else {
 			LOGGER.debug("Time: localtime");
-			return new TimeOption(receiveTime);
+			return DEFINITION.create(receiveTime);
 		}
 	}
 
@@ -165,25 +150,38 @@ public class TimeOption extends Option {
 	 */
 	private static final int DEPRECATED_COAP_OPTION_TIME = 0xff3c;
 
-	public static final IntegerOptionDefinition DEPRECATED_DEFINITION = new IntegerOptionDefinition(
-			DEPRECATED_COAP_OPTION_TIME, "_Time", true) {
+	public static final Definition DEPRECATED_DEFINITION = new Definition(DEPRECATED_COAP_OPTION_TIME, "_Time");
 
-		@Override
-		public Option create(byte[] value) {
-			return new TimeOption(DEPRECATED_DEFINITION, value);
-		}
-
-	};
-
-	private TimeOption(IntegerOptionDefinition definition) {
+	public TimeOption(Definition definition) {
 		super(definition, System.currentTimeMillis());
 	}
 
-	private TimeOption(IntegerOptionDefinition definition, long value) {
+	public TimeOption(Definition definition, long value) {
 		super(definition, value);
 	}
 
-	private TimeOption(IntegerOptionDefinition definition, byte[] value) {
-		super(definition, value);
+	public static class Definition extends IntegerOption.Definition {
+
+		private Definition(int number, String name) {
+			super(number, name, true);
+		}
+
+		@Override
+		public TimeOption create(DatagramReader reader, int length) {
+			if (reader == null) {
+				throw new NullPointerException("Option " + getName() + " reader must not be null.");
+			}
+			return new TimeOption(this, getLongValue(reader, length));
+		}
+
+		@Override
+		public TimeOption create(long value) {
+			return new TimeOption(this, value);
+		}
+
+		public TimeOption create() {
+			return new TimeOption(this);
+		}
 	}
+
 }

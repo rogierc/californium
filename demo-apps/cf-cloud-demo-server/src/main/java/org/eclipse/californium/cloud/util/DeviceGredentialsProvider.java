@@ -15,9 +15,9 @@
 package org.eclipse.californium.cloud.util;
 
 import org.eclipse.californium.scandium.auth.ApplicationLevelInfoSupplier;
-import org.eclipse.californium.scandium.dtls.pskstore.AdvancedPskStore;
+import org.eclipse.californium.scandium.dtls.pskstore.PskStore;
 import org.eclipse.californium.scandium.dtls.x509.CertificateProvider;
-import org.eclipse.californium.scandium.dtls.x509.NewAdvancedCertificateVerifier;
+import org.eclipse.californium.scandium.dtls.x509.CertificateVerifier;
 
 /**
  * Device credentials provider.
@@ -28,27 +28,27 @@ public interface DeviceGredentialsProvider {
 
 	/**
 	 * Get PreSharedKey store.
-	 * 
+	 * <p>
 	 * The PreSharedKey store contains all valid identity and secret key pairs
 	 * of the provisioned devices.
 	 * 
 	 * @return PreSharedKey store, or {@code null}, if not available.
 	 */
-	AdvancedPskStore getPskStore();
+	PskStore getPskStore();
 
 	/**
 	 * Get certificate verifier.
-	 * 
+	 * <p>
 	 * The certificate verifier is used to verify all received certificates from
 	 * the devices.
 	 * 
 	 * @return certificate verifier, or {@code null}, if not available.
 	 */
-	NewAdvancedCertificateVerifier getCertificateVerifier();
+	CertificateVerifier getCertificateVerifier();
 
 	/**
 	 * Get certificate provider.
-	 * 
+	 * <p>
 	 * The certificate provider provides the certificate to identify this peer.
 	 * 
 	 * @return certificate provider, or {@code null}, if not available.
@@ -57,7 +57,7 @@ public interface DeviceGredentialsProvider {
 
 	/**
 	 * Get additional information supplier.
-	 * 
+	 * <p>
 	 * Used to add additional device information to the principal representing
 	 * the device.
 	 * 

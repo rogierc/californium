@@ -55,6 +55,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.californium.TestTools;
+import org.eclipse.californium.core.CoapExchange;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.CoapServer;
 import org.eclipse.californium.core.coap.MessageObserver;
@@ -63,14 +64,12 @@ import org.eclipse.californium.core.coap.Response;
 import org.eclipse.californium.core.coap.Token;
 import org.eclipse.californium.core.coap.option.StandardOptionRegistry;
 import org.eclipse.californium.core.config.CoapConfig;
-import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.core.test.ErrorInjector;
 import org.eclipse.californium.core.test.MessageExchangeStoreTool.CoapTestEndpoint;
 import org.eclipse.californium.elements.category.Medium;
 import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.rule.TestNameLoggerRule;
 import org.eclipse.californium.elements.rule.TestTimeRule;
-import org.eclipse.californium.elements.util.TestCondition;
 import org.eclipse.californium.elements.util.TestConditionTools;
 import org.eclipse.californium.rule.CoapNetworkRule;
 import org.eclipse.californium.rule.CoapThreadsRule;
@@ -192,6 +191,8 @@ public class ObserveServerSideTest {
 		testObsResource.setObserveType(CON);
 		testObsResource.change("Third notification");
 		client.expectResponse().type(CON).code(CONTENT).token(tok).storeMID("MID").checkObs("B", "C").payload(respPayload).go();
+		serverInterceptor.log(" // lost");
+		client.expectResponse().type(CON).code(CONTENT).token(tok).sameMID("MID").loadObserve("C").payload(respPayload).go();
 		client.sendEmpty(ACK).loadMID("MID").go();
 
 		// Forth notification
@@ -741,12 +742,8 @@ public class ObserveServerSideTest {
 
 	private int waitForObservers(long timeoutMillis, final int count) throws InterruptedException {
 
-		TestConditionTools.waitForCondition(timeoutMillis, 50, TimeUnit.MILLISECONDS, new TestCondition() {
-
-			@Override
-			public boolean isFulFilled() throws IllegalStateException {
-				return testObsResource.getObserverCount() == count;
-			}
+		TestConditionTools.waitForCondition(timeoutMillis, 50, TimeUnit.MILLISECONDS, () -> {
+			return testObsResource.getObserverCount() == count;
 		});
 
 		return testObsResource.getObserverCount();
